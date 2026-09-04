@@ -195,7 +195,7 @@ public sealed class TabService
         var list = new List<TabStateSummary>(Tabs.Count);
         foreach (var t in Tabs)
         {
-            list.Add(new TabStateSummary(t.Id, (Encomm.Browser.Memory.TabRendererState)(int)t.RendererState));
+            list.Add(new TabStateSummary(t.Id, (TabRendererState)(int)t.RendererState));
         }
         return list;
     }

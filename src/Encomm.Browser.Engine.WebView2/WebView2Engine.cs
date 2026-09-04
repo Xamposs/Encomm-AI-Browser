@@ -15,6 +15,8 @@ public sealed class WebView2Engine : IBrowserEngine
     public string? RuntimeVersion { get; }
 
     private readonly IRequestBlocker _blocker;
+    private CoreWebView2Environment? _environment;
+    private readonly object _envGate = new();
 
     public WebView2Engine(IRequestBlocker blocker)
     {
@@ -23,9 +25,56 @@ public sealed class WebView2Engine : IBrowserEngine
         catch { RuntimeVersion = null; }
     }
 
+    /// <summary>Called by <see cref="WebView2EngineFactory"/> after the
+    /// environment is created, so process-info can be queried.</summary>
+    internal void SetEnvironment(CoreWebView2Environment env)
+    {
+        lock (_envGate) _environment = env;
+    }
+
+    public IReadOnlyList<WebViewProcessInfo> GetWebViewProcessInfos()
+    {
+        CoreWebView2Environment? env;
+        lock (_envGate) env = _environment;
+        if (env is null) return System.Array.Empty<WebViewProcessInfo>();
+        try
+        {
+            var infos = env.GetProcessInfos();
+            var list = new System.Collections.Generic.List<WebViewProcessInfo>(infos.Count);
+            foreach (var p in infos)
+            {
+                var kind = p.Kind switch
+                {
+                    CoreWebView2ProcessKind.Browser => WebViewProcessKind.Browser,
+                    CoreWebView2ProcessKind.Renderer => WebViewProcessKind.Renderer,
+                    CoreWebView2ProcessKind.Gpu => WebViewProcessKind.Gpu,
+                    _ => WebViewProcessKind.Utility
+                };
+                list.Add(new WebViewProcessInfo(p.ProcessId, kind, TryGetWorkingSet(p.ProcessId)));
+            }
+            return list;
+        }
+        catch
+        {
+            return System.Array.Empty<WebViewProcessInfo>();
+        }
+    }
+
+    private static long TryGetWorkingSet(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            p.Refresh();
+            return p.WorkingSet64;
+        }
+        catch { return 0; }
+    }
+
     public async Task<IBrowserView> CreateViewAsync(Guid tabId, CancellationToken ct = default)
     {
         var env = await CreateEnvironmentAsync().ConfigureAwait(false);
+        SetEnvironment(env);
         var view = new WebView2BrowserView(tabId, env, _blocker);
         return view;
     }
@@ -42,19 +91,21 @@ public sealed class WebView2Engine : IBrowserEngine
         // but the C#/WinRT projection metadata (which the C# compiler
         // consumes) has a partial surface. The reliable call is the
         // 1-arg form (userDataFolder). We try the 1-arg first and
-        // fall back to the 3-arg via reflection.
+        // fall back to the 3-arg via reflection. Both invocations
+        // already return a Task; we unwrap it here for the caller.
         var t = typeof(CoreWebView2Environment);
+        Task<CoreWebView2Environment>? task = null;
         var m1 = t.GetMethod("CreateAsync", new[] { typeof(string) });
         if (m1 is not null)
+            task = (Task<CoreWebView2Environment>)m1.Invoke(null, new object?[] { userData })!;
+        else
         {
-            return (Task<CoreWebView2Environment>)m1.Invoke(null, new object?[] { userData })!;
+            var m3 = t.GetMethod("CreateAsync", new[] { typeof(string), typeof(string), typeof(CoreWebView2EnvironmentOptions) });
+            if (m3 is not null)
+                task = (Task<CoreWebView2Environment>)m3.Invoke(null, new object?[] { null, userData, null })!;
         }
-        var m3 = t.GetMethod("CreateAsync", new[] { typeof(string), typeof(string), typeof(CoreWebView2EnvironmentOptions) });
-        if (m3 is not null)
-        {
-            return (Task<CoreWebView2Environment>)m3.Invoke(null, new object?[] { null, userData, null })!;
-        }
-        throw new InvalidOperationException("CoreWebView2Environment.CreateAsync overload not found.");
+        if (task is null) throw new InvalidOperationException("CoreWebView2Environment.CreateAsync overload not found.");
+        return task;
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

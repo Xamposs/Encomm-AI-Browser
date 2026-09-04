@@ -66,6 +66,18 @@ public sealed class BrowserRuntime : IAsyncDisposable
         get { lock (_viewsGate) return new Dictionary<Guid, IBrowserView>(_views); }
     }
 
+    /// <summary>
+    /// Collect the WebView2 child process tree of the current engine.
+    /// Returns an empty list if the engine does not expose process info
+    /// (e.g. before the engine is ready, or for non-WebView2 adapters).
+    /// </summary>
+    public IReadOnlyList<WebViewProcessInfo> GetWebViewProcessInfos()
+    {
+        if (_initTask is null || !_initTask.IsCompletedSuccessfully) return Array.Empty<WebViewProcessInfo>();
+        var engine = _initTask.Result;
+        return engine.GetWebViewProcessInfos();
+    }
+
     /// <summary>Get a live view for the tab, creating it if needed. Lazy.</summary>
     public async Task<IBrowserView> GetOrCreateAsync(TabRecord tab, CancellationToken ct = default)
     {

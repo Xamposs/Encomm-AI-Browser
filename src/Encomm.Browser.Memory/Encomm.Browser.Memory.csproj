@@ -11,4 +11,7 @@
     <RootNamespace>Encomm.Browser.Memory</RootNamespace>
     <AssemblyName>Encomm.Browser.Memory</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Encomm.Browser.Engine.Abstractions\Encomm.Browser.Engine.Abstractions.csproj" />
+  </ItemGroup>
 </Project>

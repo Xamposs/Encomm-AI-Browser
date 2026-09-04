@@ -1,43 +1,75 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using Encomm.Browser.Engine.Abstractions;
 
 namespace Encomm.Browser.Memory;
 
-public sealed record MemorySample(
-    long WorkingSetBytes,
-    long PrivateBytes,
-    int LiveTabs,
-    int WarmTabs,
-    int GhostTabs,
-    int TotalTabs,
-    DateTimeOffset SampledUtc);
-
 /// <summary>
-/// Lightweight in-process memory probe. No allocations beyond the
-/// sample itself on every poll. Designed to be called from a timer or
-/// on-demand from the UI.
+/// Process-tree memory snapshot. Includes:
+///   * Encomm host process working set + private bytes
+///   * Aggregate WebView2 child process memory (browser, renderer, GPU,
+///     utility) when the engine exposes a CoreWebView2Environment
+///   * Logical tab counts (Live / Warm / Ghost)
+///   * Renderer instance count
+///
+/// We DO NOT invent per-tab attribution. The WebView2 browser process
+/// shares its renderer count with all tabs and the underlying Chromium
+/// process is shared across windows in the same process tree.
 /// </summary>
 public sealed class MemoryProbe
 {
     private readonly Func<IReadOnlyList<TabStateSummary>> _tabSource;
-    private readonly Process _process;
 
     public MemoryProbe(Func<IReadOnlyList<TabStateSummary>> tabSource)
     {
         _tabSource = tabSource;
-        _process = Process.GetCurrentProcess();
     }
 
-    public MemorySample Sample()
+    /// <summary>
+    /// Capture a snapshot of the current process tree.
+    /// </summary>
+    /// <param name="processInfos">
+    /// Optional list of WebView2 child process memory snapshots (process
+    /// tree of the engine). If null, only the host is measured.
+    /// </param>
+    public MemorySnapshot Sample(IReadOnlyList<WebViewProcessInfo>? processInfos = null)
     {
-        try { _process.Refresh(); } catch { }
-        var ws = _process.WorkingSet64;
-        long privateBytes = 0;
-        try { privateBytes = _process.PrivateMemorySize64; } catch { }
+        var hostProcess = Process.GetCurrentProcess();
+        long hostWs, hostPrivate;
+        try
+        {
+            hostProcess.Refresh();
+            hostWs = hostProcess.WorkingSet64;
+            hostPrivate = hostProcess.PrivateMemorySize64;
+        }
+        catch
+        {
+            hostWs = 0;
+            hostPrivate = 0;
+        }
+
+        long browser = 0, renderer = 0, gpu = 0, utility = 0, total = hostWs;
+        int count = 1;
+        if (processInfos is not null)
+        {
+            foreach (var p in processInfos)
+            {
+                total += p.WorkingSet64;
+                count++;
+                switch (p.Kind)
+                {
+                    case WebViewProcessKind.Browser: browser += p.WorkingSet64; break;
+                    case WebViewProcessKind.Renderer: renderer += p.WorkingSet64; break;
+                    case WebViewProcessKind.Gpu: gpu += p.WorkingSet64; break;
+                    case WebViewProcessKind.Utility: utility += p.WorkingSet64; break;
+                }
+            }
+        }
+
+        int live = 0, warm = 0, ghost = 0, total2 = 0;
         var tabs = _tabSource();
-        int live = 0, warm = 0, ghost = 0;
         foreach (var t in tabs)
         {
+            total2++;
             switch (t.RendererState)
             {
                 case TabRendererState.Live: live++; break;
@@ -45,47 +77,48 @@ public sealed class MemoryProbe
                 case TabRendererState.Ghost: ghost++; break;
             }
         }
-        return new MemorySample(ws, privateBytes, live, warm, ghost, tabs.Count, DateTimeOffset.UtcNow);
+
+        return new MemorySnapshot(
+            HostProcessId: hostProcess.Id,
+            HostWorkingSetBytes: hostWs,
+            HostPrivateBytes: hostPrivate,
+            WebView2BrowserBytes: browser,
+            WebView2RendererBytes: renderer,
+            WebView2GpuBytes: gpu,
+            WebView2UtilityBytes: utility,
+            ProcessTreeBytes: total,
+            ProcessCount: count,
+            TotalTabs: total2,
+            LiveTabs: live,
+            WarmTabs: warm,
+            GhostTabs: ghost,
+            SampledUtc: DateTimeOffset.UtcNow);
     }
 }
 
-public enum TabRendererState { Live, Warm, Ghost }
+public enum WebViewProcessKindRemoved_Duplicate { } // moved to Encomm.Browser.Engine.Abstractions
 
-public sealed record TabStateSummary(Guid Id, TabRendererState RendererState);
-
-/// <summary>
-/// Optional Win32 helper for higher-fidelity private working-set info.
-/// Falls back gracefully when the API is not present.
-/// </summary>
-public static class NativeMemory
+public enum TabRendererState
 {
-    [DllImport("psapi.dll", SetLastError = true)]
-    private static extern bool GetProcessMemoryInfo(IntPtr process, out PROCESS_MEMORY_COUNTERS counters, uint size);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_MEMORY_COUNTERS
-    {
-        public uint cb;
-        public uint PageFaultCount;
-        public UIntPtr PeakWorkingSetSize;
-        public UIntPtr WorkingSetSize;
-        public UIntPtr QuotaPeakPagedPoolUsage;
-        public UIntPtr QuotaPagedPoolUsage;
-        public UIntPtr QuotaPeakNonPagedPoolUsage;
-        public UIntPtr QuotaNonPagedPoolUsage;
-        public UIntPtr PagefileUsage;
-        public UIntPtr PeakPagefileUsage;
-    }
-
-    public static long GetPrivateWorkingSetBytes()
-    {
-        try
-        {
-            var p = Process.GetCurrentProcess();
-            if (GetProcessMemoryInfo(p.Handle, out var c, (uint)Marshal.SizeOf<PROCESS_MEMORY_COUNTERS>()))
-                return (long)c.WorkingSetSize;
-        }
-        catch { }
-        return 0;
-    }
+    Live,
+    Warm,
+    Ghost
 }
+
+public sealed record TabStateSummary(Guid TabId, TabRendererState RendererState);
+
+public sealed record MemorySnapshot(
+    int HostProcessId,
+    long HostWorkingSetBytes,
+    long HostPrivateBytes,
+    long WebView2BrowserBytes,
+    long WebView2RendererBytes,
+    long WebView2GpuBytes,
+    long WebView2UtilityBytes,
+    long ProcessTreeBytes,
+    int ProcessCount,
+    int TotalTabs,
+    int LiveTabs,
+    int WarmTabs,
+    int GhostTabs,
+    DateTimeOffset SampledUtc);

@@ -172,6 +172,16 @@ public sealed class RenderErrorEventArgs : EventArgs
     public Exception? Exception { get; init; }
 }
 
+public enum WebViewProcessKind
+{
+    Browser,
+    Renderer,
+    Gpu,
+    Utility
+}
+
+public sealed record WebViewProcessInfo(int ProcessId, WebViewProcessKind Kind, long WorkingSet64);
+
 /// <summary>
 /// Process-wide engine factory. Owns the shared environment / user data
 /// folder, and creates per-tab views.
@@ -186,6 +196,12 @@ public interface IBrowserEngine : IAsyncDisposable
 
     /// <summary>Create a view for the given tab id.</summary>
     Task<IBrowserView> CreateViewAsync(Guid tabId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Return the engine's child process memory tree. Adapters that
+    /// don't support process introspection return an empty list.
+    /// </summary>
+    IReadOnlyList<WebViewProcessInfo> GetWebViewProcessInfos();
 }
 
 /// <summary>
