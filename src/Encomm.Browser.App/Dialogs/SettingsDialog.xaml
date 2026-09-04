@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="Encomm.Browser.App.Dialogs.SettingsDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Settings"
+    PrimaryButtonText="Save"
+    CloseButtonText="Close"
+    DefaultButton="Primary"
+    PrimaryButtonClick="OnSave">
+    <ScrollViewer MaxHeight="600">
+        <StackPanel Spacing="12" Width="520">
+            <TextBlock Text="Mode" FontWeight="SemiBold" />
+            <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch">
+                <x:String>Everyday</x:String>
+                <x:String>Developer</x:String>
+            </ComboBox>
+
+            <TextBlock Text="Search provider URL" FontWeight="SemiBold" />
+            <TextBox x:Name="SearchUrlBox" />
+
+            <TextBlock Text="Theme" FontWeight="SemiBold" />
+            <ComboBox x:Name="ThemeBox" HorizontalAlignment="Stretch">
+                <x:String>System</x:String>
+                <x:String>Light</x:String>
+                <x:String>Dark</x:String>
+            </ComboBox>
+
+            <TextBlock Text="Memory saver" FontWeight="SemiBold" />
+            <ToggleSwitch x:Name="MemorySaver" OnContent="Enabled" OffContent="Disabled" />
+            <ComboBox x:Name="PresetBox" HorizontalAlignment="Stretch">
+                <x:String>Balanced</x:String>
+                <x:String>Aggressive</x:String>
+                <x:String>NeverSleep</x:String>
+            </ComboBox>
+
+            <TextBlock Text="Shield" FontWeight="SemiBold" />
+            <ToggleSwitch x:Name="Shield" OnContent="Enabled" OffContent="Disabled" />
+
+            <TextBlock Text="Restore last session on launch" FontWeight="SemiBold" />
+            <ToggleSwitch x:Name="RestoreSession" OnContent="Yes" OffContent="No" />
+
+            <TextBlock Text="AI provider" FontWeight="SemiBold" />
+            <StackPanel Spacing="6">
+                <ComboBox x:Name="ProviderBox" HorizontalAlignment="Stretch">
+                    <x:String>mock</x:String>
+                    <x:String>openai-compatible</x:String>
+                </ComboBox>
+                <TextBox x:Name="BaseUrlBox" PlaceholderText="https://api.openai.com/v1" />
+                <TextBox x:Name="ModelBox" PlaceholderText="model name (optional)" />
+                <PasswordBox x:Name="SecretBox" PlaceholderText="API key (stored encrypted)" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="Save key" Click="OnSaveKey" />
+                    <Button Content="Clear key" Click="OnClearKey" />
+                    <Button Content="Test connection" Click="OnTestConnection" />
+                    <TextBlock x:Name="TestResult" VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+
+            <TextBlock x:Name="Status" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

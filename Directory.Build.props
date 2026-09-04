@@ -1,0 +1,33 @@
+<Project>
+  <!--
+    Directory.Build.props for the Encomm solution.
+    Loaded BEFORE project files. Used to set MSBuild-wide defaults and to
+    register UsingTask overrides for MSBuild tasks that the Windows App
+    SDK targets reference but that only ship with Visual Studio.
+  -->
+
+  <PropertyGroup>
+    <_EncommStubTasksDir>$(MSBuildThisFileDirectory)tools\StubTasks</_EncommStubTasksDir>
+    <_EncommStubTasksBuiltPath>$(_EncommStubTasksDir)\bin\Release\netstandard2.0\Encomm.Stub.MSBuildTasks.dll</_EncommStubTasksBuiltPath>
+    <_EncommIsBuildingStubs Condition="'$(MSBuildProjectName)' == 'Encomm.StubTasks'">true</_EncommIsBuildingStubs>
+  </PropertyGroup>
+
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.RemovePayloadDuplicates" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.ExpandPayloadDirectories" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.GetDefaultResourceLanguage" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.GetPackageArchitecture" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.GetSdkFileFullPath" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.GetSdkPropertyValue" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.RemoveRedundantXamlFilesFromSdkPayload" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.AppxPackage.ValidateConfiguration" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.ExpandPriContent" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.CreatePriConfigXmlForSplitting" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.CreatePriConfigXmlForMainPackageFileMap" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.CreatePriConfigXmlForFullIndex" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.CreatePriFilesForPortableLibraries" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.GenerateMainPriConfigurationFile" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.GeneratePriConfigurationFiles" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.GenerateProjectPriFile" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.RemoveDuplicatePriFiles" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+  <UsingTask TaskName="Microsoft.Build.Packaging.Pri.Tasks.UpdateMainPackageFileMap" AssemblyFile="$(_EncommStubTasksBuiltPath)" Condition="'$(_EncommIsBuildingStubs)' != 'true' and Exists('$(_EncommStubTasksBuiltPath)')" />
+</Project>

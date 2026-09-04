@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="Encomm.Browser.App.Dialogs.AICommandDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="AI Commands"
+    CloseButtonText="Close">
+    <StackPanel Spacing="8" Width="520">
+        <TextBlock x:Name="ProviderLabel" Opacity="0.7" />
+        <TextBlock Text="Actions" FontWeight="SemiBold" />
+        <ItemsControl x:Name="Commands">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Button Content="{Binding Label}" Click="OnRunCommand" Tag="{Binding Id}" HorizontalAlignment="Stretch" Margin="0,2" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="Result" FontWeight="SemiBold" />
+        <ScrollViewer MaxHeight="280">
+            <TextBlock x:Name="ResultBox" TextWrapping="Wrap" FontFamily="Consolas" />
+        </ScrollViewer>
+    </StackPanel>
+</ContentDialog>

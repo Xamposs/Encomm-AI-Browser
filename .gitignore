@@ -1,0 +1,69 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.suo
+*.userprefs
+*.pidb
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test results
+[Tt]est[Rr]esult*/
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Tools / NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$DRECYCLE.BIN/
+
+# Local user data (Encomm runtime data must NEVER be committed)
+AppData/
+LocalAppData/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Secrets — must never enter the repo
+*.pfx
+*.p12
+*.key
+*.env
+.env
+appsettings.Local.json
+appsettings.Development.json
+
+# Crash / dumps
+*.dmp
+*.mdmp
+core.*
+
+# Generated artifact caches
+artifacts/
+publish/
+
+# Logs
+*.log
+logs/

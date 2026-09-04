@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    Directory.Build.targets for the Encomm solution.
+
+    Ensures the stub MSBuild task assembly is built before the first
+    project that needs it. The stub assembly itself is built by
+    Encomm.StubTasks.csproj and is excluded from this loop to avoid
+    infinite recursion.
+  -->
+  <PropertyGroup>
+    <_EncommStubTasksDir>$(MSBuildThisFileDirectory)tools\StubTasks</_EncommStubTasksDir>
+    <_EncommStubTasksSourceCsproj>$(_EncommStubTasksDir)\Encomm.StubTasks.csproj</_EncommStubTasksSourceCsproj>
+    <_EncommStubTasksBuiltPath>$(_EncommStubTasksDir)\bin\Release\netstandard2.0\Encomm.Stub.MSBuildTasks.dll</_EncommStubTasksBuiltPath>
+    <_EncommIsBuildingStubs Condition="'$(MSBuildProjectName)' == 'Encomm.StubTasks'">true</_EncommIsBuildingStubs>
+  </PropertyGroup>
+
+  <Target Name="_EncommBuildStubTasks"
+          BeforeTargets="BeforeBuild;BeforeRebuild;BeforeClean"
+          Condition="'$(_EncommIsBuildingStubs)' != 'true' and !Exists('$(_EncommStubTasksBuiltPath)')">
+    <Message Text="[Encomm] Building stub MSBuild tasks at $(_EncommStubTasksBuiltPath)" Importance="High" />
+    <Exec Command="dotnet build &quot;$(_EncommStubTasksSourceCsproj)&quot; -c Release --nologo" />
+  </Target>
+</Project>

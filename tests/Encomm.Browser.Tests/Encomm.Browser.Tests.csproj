@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>AnyCPU;x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseRidGraph>true</UseRidGraph>
+    <UseWinUI>false</UseWinUI>
+    <EnableMrtResourceManager>false</EnableMrtResourceManager>
+    <EnableDefaultMrtResources>false</EnableDefaultMrtResources>
+    <EnableDefaultPriItems>false</EnableDefaultPriItems>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <AppxPackage>false</AppxPackage>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Encomm.Browser.Tests</RootNamespace>
+    <AssemblyName>Encomm.Browser.Tests</AssemblyName>
+    <NoWarn>$(NoWarn);CS0067;CS0068;CS0162;CS0168;CS0219;CS0414;CS8600;CS8602;CS8603;CS8604;CS8625;CA1416;CA1840</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Encomm.Browser.Engine.Abstractions\Encomm.Browser.Engine.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Core\Encomm.Browser.Core.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Shield\Encomm.Browser.Shield.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.AI\Encomm.Browser.AI.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Tabs\Encomm.Browser.Tabs.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Workspaces\Encomm.Browser.Workspaces.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Memory\Encomm.Browser.Memory.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Security\Encomm.Browser.Security.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Settings\Encomm.Browser.Settings.csproj" />
+  </ItemGroup>
+</Project>
