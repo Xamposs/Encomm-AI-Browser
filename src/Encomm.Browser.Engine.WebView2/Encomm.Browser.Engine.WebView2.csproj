@@ -21,8 +21,8 @@
     <AssemblyName>Encomm.Browser.Engine.WebView2</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250606001" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3719.77" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Encomm.Browser.Engine.Abstractions\Encomm.Browser.Engine.Abstractions.csproj" />

@@ -17,27 +17,30 @@ namespace Encomm.Browser.App;
 public partial class App : Application
 {
     public static IServiceProvider Services { get; private set; } = null!;
+#pragma warning disable CS0649
     private Window? _mainWindow;
+#pragma warning restore CS0649
+    private readonly ILogger<App>? _log;
 
     public App()
     {
         InitializeComponent();
         Services = BuildServices();
+        _log = Services.GetService<ILoggerFactory>()?.CreateLogger<App>();
+        _log?.LogInformation("App starting.");
         // Wire ambient workspace accessor
         WorkspaceContextAccessor.Current = Services.GetRequiredService<WorkspaceService>();
+        _log?.LogInformation("Workspace context wired.");
     }
 
     public Window? MainWindowForTheme => _mainWindow;
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _mainWindow = new MainWindow();
-        _mainWindow.Activate();
-        // Auto-start lifecycle ticking
-        var lifecycle = Services.GetRequiredService<TabLifecycleManager>();
-        var timer = new System.Timers.Timer(60_000) { AutoReset = true };
-        timer.Elapsed += (_, _) => { try { lifecycle.Tick(); } catch { } };
-        timer.Start();
+        // Intentionally left empty. The desktop app creates its main window
+        // directly from the XAML startup callback (Program.cs). OnLaunched is
+        // only used for OS activation paths we don't currently exercise.
+        _log?.LogInformation("OnLaunched called (not used in desktop mode).");
     }
 
     private static IServiceProvider BuildServices()

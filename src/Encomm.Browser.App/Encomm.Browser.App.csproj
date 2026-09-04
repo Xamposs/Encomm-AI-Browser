@@ -14,20 +14,20 @@
     <EnableDefaultPriItems>false</EnableDefaultPriItems>
     <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
     <AppxPackage>false</AppxPackage>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-    <SelfContained>true</SelfContained>
+  <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  <SelfContained>true</SelfContained>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <NoWarn>$(NoWarn);CA1416;CA1840;CS8002;NU1701;MVVMTK0045;CS0067</NoWarn>
-    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <RootNamespace>Encomm.Browser.App</RootNamespace>
+  <NoWarn>$(NoWarn);CA1416;CA1840;CS8002;NU1701;MVVMTK0045;CS0067</NoWarn>
+  <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  <RootNamespace>Encomm.Browser.App</RootNamespace>
     <AssemblyName>Encomm</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250606001" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />

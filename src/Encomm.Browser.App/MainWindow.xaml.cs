@@ -10,6 +10,8 @@ using Encomm.Browser.App.Controls;
 using Encomm.Browser.App.Dialogs;
 using Encomm.Browser.Settings;
 using Encomm.Browser.AI;
+using System;
+using System.IO;
 
 namespace Encomm.Browser.App;
 
@@ -19,20 +21,33 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
-        InitializeComponent();
-        ViewModel = App.Services.GetRequiredService<MainViewModel>();
-        Title = "Encomm AI Browser";
-        // Bind accelerator keys
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.L, Modifiers = VirtualKeyModifiers.Control });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.W, Modifiers = VirtualKeyModifiers.Control });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.R, Modifiers = VirtualKeyModifiers.Control });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Left, Modifiers = VirtualKeyModifiers.Menu });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Right, Modifiers = VirtualKeyModifiers.Menu });
-        this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F12 });
-        this.Content.PreviewKeyDown += OnPreviewKeyDown;
-        AddressBox.Focus(FocusState.Programmatic);
+        try
+        {
+            InitializeComponent();
+            ViewModel = App.Services.GetRequiredService<MainViewModel>();
+            Title = "Encomm AI Browser";
+            // Bind accelerator keys
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.L, Modifiers = VirtualKeyModifiers.Control });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.W, Modifiers = VirtualKeyModifiers.Control });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.R, Modifiers = VirtualKeyModifiers.Control });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Left, Modifiers = VirtualKeyModifiers.Menu });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Right, Modifiers = VirtualKeyModifiers.Menu });
+            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F12 });
+            this.Content.PreviewKeyDown += OnPreviewKeyDown;
+            AddressBox.Focus(FocusState.Programmatic);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var path = Path.Combine(Encomm.Browser.Core.BrowserPaths.Default().LogsDirectory, "encomm.callback-fatal.txt");
+                File.WriteAllText(path, ex.ToString());
+            }
+            catch { }
+            throw;
+        }
     }
 
     public void OnAddressKeyDown(object sender, KeyRoutedEventArgs e)
