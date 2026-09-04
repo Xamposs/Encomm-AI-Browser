@@ -8,22 +8,29 @@ namespace Encomm.Browser.App.Services;
 /// <summary>
 /// Smart tab lifecycle manager. Implements deterministic, configuration-
 /// driven lifecycle demotion rules. MUST NOT call any LLM.
+///
+/// Coordinates with `BrowserRuntime` to perform the actual renderer
+/// operations (Suspend → Warm, Ghost → destroy). NEVER just flips an enum
+/// flag — every transition is paired with a real renderer call, and the
+/// outcome of the renderer call determines whether the logical state is
+/// updated.
 /// </summary>
 public sealed class TabLifecycleManager
 {
     private readonly TabService _tabs;
-    private readonly IBrowserEngine _engine;
+    private readonly BrowserRuntime _runtime;
     private readonly ILogger<TabLifecycleManager> _log;
 
     public TimeSpan WarmAfter { get; set; } = TimeSpan.FromMinutes(5);
     public TimeSpan GhostAfter { get; set; } = TimeSpan.FromMinutes(20);
     public string Preset { get; set; } = "Balanced";
     public bool MemorySaverEnabled { get; set; } = true;
+    private DateTimeOffset _lastTickUtc = DateTimeOffset.MinValue;
 
-    public TabLifecycleManager(TabService tabs, IBrowserEngine engine, ILogger<TabLifecycleManager> log)
+    public TabLifecycleManager(TabService tabs, BrowserRuntime runtime, ILogger<TabLifecycleManager> log)
     {
         _tabs = tabs;
-        _engine = engine;
+        _runtime = runtime;
         _log = log;
     }
 
@@ -48,32 +55,92 @@ public sealed class TabLifecycleManager
         }
     }
 
-    /// <summary>Run a single lifecycle pass.</summary>
-    public void Tick()
+    public DateTimeOffset LastTickUtc => _lastTickUtc;
+
+    /// <summary>
+    /// Run a single lifecycle pass. Each candidate is processed individually
+    /// so a renderer failure on one tab doesn't poison the rest.
+    /// </summary>
+    public async Task TickAsync()
     {
+        _lastTickUtc = DateTimeOffset.UtcNow;
         if (!MemorySaverEnabled) return;
+        if (!_runtime.IsReady) return;
+
         var active = _tabs.ActiveTab?.Id;
         var now = DateTimeOffset.UtcNow;
-        foreach (var t in _tabs.TabsInCurrentWorkspace())
+        // Snapshot to avoid mutation during iteration.
+        var snapshot = _tabs.TabsInCurrentWorkspace().ToList();
+        foreach (var t in snapshot)
         {
-            if (t.Id == active) continue;
-            if (t.Pinned) continue;
-            if (t.Muted) continue;
-            if (t.KeepAwake) continue;
-            if (t.LogicalState == TabLogicalStateKind.Active) continue;
+            try
+            {
+                await ProcessOneAsync(t, active, now).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Lifecycle Tick failed for tab {Id}", t.Id);
+            }
+        }
+    }
 
-            var idle = now - t.LastInteractionUtc;
-            if (t.RendererState == TabRendererStateKind.Live && idle >= WarmAfter)
+    /// <summary>Synchronous wrapper for legacy callers. Internally awaits.</summary>
+    public void Tick()
+    {
+        _ = TickAsync();
+    }
+
+    private async Task ProcessOneAsync(TabRecord t, Guid? activeId, DateTimeOffset now)
+    {
+        if (t.Id == activeId) return;
+        if (t.Pinned) return;
+        if (t.Muted) return;
+        if (t.KeepAwake) return;
+        if (t.LogicalState == TabLogicalStateKind.Active) return;
+
+        var idle = now - t.LastInteractionUtc;
+        var shouldWarm = idle >= WarmAfter;
+        var shouldGhost = idle >= GhostAfter;
+
+        // Suspend: Live -> Warm
+        if (shouldWarm && t.RendererState == TabRendererStateKind.Live)
+        {
+            if (!_runtime.HasView(t.Id)) return; // no view to suspend
+            var ok = await _runtime.SuspendAsync(t.Id).ConfigureAwait(false);
+            if (ok)
             {
-                var updated = t with { RendererState = TabRendererStateKind.Warm };
-                PersistUpdated(updated);
+                _tabs.SetRendererState(t, TabRendererStateKind.Warm);
+                _log.LogInformation("Tab {Id} → Warm (idle {Minutes}m)", t.Id, idle.TotalMinutes);
             }
-            if (t.RendererState != TabRendererStateKind.Ghost && idle >= GhostAfter)
+            else
             {
-                var updated = t with { RendererState = TabRendererStateKind.Ghost };
-                PersistUpdated(updated);
-                _log.LogInformation("Tab {Id} ghosted (idle {IdleMinutes}m)", t.Id, idle.TotalMinutes);
+                _log.LogWarning("Tab {Id} suspend reported failure; logical state unchanged.", t.Id);
             }
+            return;
+        }
+
+        // Ghost: any non-Ghost with sufficient idle → destroy renderer
+        if (shouldGhost && t.RendererState != TabRendererStateKind.Ghost)
+        {
+            var removed = await _runtime.GhostAsync(t.Id).ConfigureAwait(false);
+            if (removed || !_runtime.HasView(t.Id))
+            {
+                _tabs.SetRendererState(t, TabRendererStateKind.Ghost);
+                _log.LogInformation("Tab {Id} → Ghost (idle {Minutes}m, renderer={Removed})",
+                    t.Id, idle.TotalMinutes, removed);
+            }
+        }
+    }
+
+    public async Task GhostAllInWorkspaceAsync()
+    {
+        var snapshot = _tabs.TabsInCurrentWorkspace().ToList();
+        foreach (var t in snapshot)
+        {
+            if (t.Pinned || t.KeepAwake) continue;
+            if (t.RendererState == TabRendererStateKind.Ghost) continue;
+            await _runtime.GhostAsync(t.Id).ConfigureAwait(false);
+            _tabs.SetRendererState(t, TabRendererStateKind.Ghost);
         }
     }
 
@@ -81,22 +148,25 @@ public sealed class TabLifecycleManager
     {
         if (tab is null) return;
         if (tab.Pinned || tab.KeepAwake) return;
-        var updated = tab with { RendererState = TabRendererStateKind.Ghost };
-        PersistUpdated(updated);
+        _ = GhostOneAsync(tab);
     }
 
     public void SleepNow(TabRecord tab)
     {
         if (tab is null) return;
         if (tab.Pinned || tab.KeepAwake) return;
-        var updated = tab with { RendererState = TabRendererStateKind.Warm };
-        PersistUpdated(updated);
+        _ = SleepOneAsync(tab);
     }
 
-    private void PersistUpdated(TabRecord updated)
+    private async Task GhostOneAsync(TabRecord tab)
     {
-        var idx = _tabs.Tabs.IndexOf(_tabs.Tabs.FirstOrDefault(t => t.Id == updated.Id)!);
-        if (idx < 0) return;
-        _tabs.Tabs[idx] = updated;
+        await _runtime.GhostAsync(tab.Id).ConfigureAwait(false);
+        _tabs.SetRendererState(tab, TabRendererStateKind.Ghost);
+    }
+
+    private async Task SleepOneAsync(TabRecord tab)
+    {
+        var ok = await _runtime.SuspendAsync(tab.Id).ConfigureAwait(false);
+        if (ok) _tabs.SetRendererState(tab, TabRendererStateKind.Warm);
     }
 }

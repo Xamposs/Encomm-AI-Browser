@@ -7,21 +7,17 @@ using Encomm.Browser.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.ApplicationModel.DynamicDependency;
 
 namespace Encomm.Browser.App;
 
 /// <summary>
 /// Custom entry point.
 ///
-/// We do our own bootstrap so we can write a startup log before XAML
-/// touches anything, surface failures as a real exit code, and run
-/// without depending on the Windows App SDK framework package being
-/// properly registered for the current user (which is the dominant
-/// reason WinUI 3 unpackaged apps fail on dev machines that have the
-/// runtime installed by another tool but not registered for the user).
-///
-/// The startup log is written to %LOCALAPPDATA%\Encomm\Encomm-AI-Browser\Logs\encomm.log
+/// We do our own startup so we can write a startup log before XAML touches
+/// anything and surface failures as a real exit code. The WinAppSDK 2.x
+/// auto-initializer handles UndockedRegFreeWinRT internally; we only
+/// force-load Microsoft.WindowsAppRuntime.dll to ensure native symbols
+/// are resolved before XAML activation.
 /// </summary>
 public static class Program
 {
@@ -51,9 +47,8 @@ public static class Program
             Log(logPath, "=== Encomm AI Browser startup ===");
             Log(logPath, $"Process: {Environment.ProcessId}, args=[{string.Join(",", args)}]");
 
-            // 1) Search the executable directory first so the WinAppRuntime
-            //    DLLs in self-contained builds are found without the
-            //    framework package.
+            // 1) Set the DLL search order so the runtime DLLs in the bin
+            //    directory are found before anything else.
             SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
                                      LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
                                      LOAD_LIBRARY_SEARCH_USER_DIRS |
@@ -61,11 +56,7 @@ public static class Program
             AddDllDirectory(AppContext.BaseDirectory);
             Log(logPath, $"DLL search path: {AppContext.BaseDirectory}");
 
-            // 2) Force-load the Windows App Runtime native DLL. This is the
-            //    same call the SDK's UndockedRegFreeWinRT auto-initializer
-            //    makes, and it is what allows `Microsoft.UI.Xaml` etc. to be
-            //    activated from the bin directory in unpackaged / framework-
-            //    dependent mode.
+            // 2) Force-load the Windows App Runtime native DLL.
             try
             {
                 int hr = WindowsAppRuntime_EnsureIsLoaded();
@@ -91,14 +82,7 @@ public static class Program
                 Log(logPath, $"WebView2 runtime probe FAILED: {ex.Message}");
             }
 
-            // 4) Try the bootstrap as a last-ditch effort. In self-contained
-            //    mode the bootstrap may legitimately fail (it looks for a
-            //    framework package by default); we try the OnPackageIdentity_NOOP
-            //    option so it does not look for a package.
-            TryBootstrap(logPath, 0x00020002, (string?)null, "WinAppSDK 2.2 release");
-            TryBootstrap(logPath, 0x00010007, (string?)null, "WinAppSDK 1.7 release");
-
-            // 5) Start XAML application on the UI thread.
+            // 4) Start XAML application on the UI thread.
             WinRT.ComWrappersSupport.InitializeComWrappers();
             Log(logPath, "ComWrappers initialized. Starting XAML Application.");
             Application.Start((ApplicationInitializationCallbackParams p) =>
@@ -144,29 +128,13 @@ public static class Program
             var tqTimer = dispatcher.CreateTimer();
             tqTimer.Interval = TimeSpan.FromSeconds(60);
             tqTimer.IsRepeating = true;
-            tqTimer.Tick += (s, e) => { try { lifecycle.Tick(); } catch { } };
+            tqTimer.Tick += (s, e) =>
+            {
+                _ = lifecycle.TickAsync();
+            };
             tqTimer.Start();
         }
         catch { }
-    }
-
-    private static void TryBootstrap(string logPath, uint majorMinor, string? versionTag, string label)
-    {
-        try
-        {
-            var pkgVersion = new PackageVersion();
-            var options = Bootstrap.InitializeOptions.OnPackageIdentity_NOOP;
-            bool ok = Bootstrap.TryInitialize(majorMinor, versionTag, pkgVersion, options, out int hr);
-            Log(logPath, $"Bootstrap ({label}) ok={ok} hr=0x{hr:X8} options=OnPackageIdentity_NOOP");
-        }
-        catch (DllNotFoundException dnf)
-        {
-            Log(logPath, $"Bootstrap DLL missing ({label}): {dnf.Message}");
-        }
-        catch (Exception ex)
-        {
-            Log(logPath, $"Bootstrap EXCEPTION ({label}): {ex.GetType().Name}: {ex.Message}");
-        }
     }
 
     private static readonly object _logGate = new();

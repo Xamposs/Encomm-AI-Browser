@@ -42,7 +42,6 @@ public partial class App : Application
         // only used for OS activation paths we don't currently exercise.
         _log?.LogInformation("OnLaunched called (not used in desktop mode).");
     }
-
     private static IServiceProvider BuildServices()
     {
         var services = new ServiceCollection();
@@ -60,8 +59,26 @@ public partial class App : Application
 
         services.AddSingleton<BrowserPersistenceService>();
         services.AddSingleton<WorkspaceService>();
-        services.AddSingleton<TabService>();
+        services.AddSingleton<TabService>(sp =>
+        {
+            var svc = new TabService(
+                sp.GetRequiredService<BrowserPersistenceService>(),
+                sp.GetRequiredService<ILogger<TabService>>());
+            svc.ConfigureSearchProvider(sp.GetRequiredService<SettingsService>().Current.SearchProviderUrl);
+            return svc;
+        });
+
+        // WebView2 engine factory creates the engine on demand when the
+        // BrowserRuntime initializes. We pin to 2.2 to match the
+        // system-installed WindowsAppRuntime framework.
+        services.AddSingleton<WebView2EngineFactory>();
+        services.AddSingleton<BrowserRuntime>(sp => new BrowserRuntime(
+            sp.GetRequiredService<IRequestBlocker>(),
+            sp.GetRequiredService<ILogger<BrowserRuntime>>(),
+            sp.GetRequiredService<TabService>(),
+            rt => sp.GetRequiredService<WebView2EngineFactory>().CreateAsync(rt)));
         services.AddSingleton<TabLifecycleManager>();
+
         services.AddSingleton<IFilterRuleProvider>(_ => new FilterRuleProvider());
         services.AddSingleton<IRequestBlocker>(sp =>
         {
@@ -69,7 +86,7 @@ public partial class App : Application
             blocker.Enabled = sp.GetRequiredService<SettingsService>().Current.ShieldEnabled;
             return blocker;
         });
-        services.AddSingleton<BrowserEngineRegistry>();
+
         services.AddSingleton<AIService>();
 
         services.AddSingleton<MemoryProbe>(sp =>

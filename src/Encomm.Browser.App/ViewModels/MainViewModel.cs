@@ -12,7 +12,7 @@ public sealed partial class MainViewModel : ObservableObject
 {
     private readonly WorkspaceService _workspaces;
     private readonly TabService _tabs;
-    private readonly BrowserEngineRegistry _engineRegistry;
+    private readonly BrowserRuntime _runtime;
     private readonly AIService _ai;
     private readonly SettingsService _settingsService;
     private readonly ILogger<MainViewModel> _log;
@@ -36,14 +36,14 @@ public sealed partial class MainViewModel : ObservableObject
     public MainViewModel(
         WorkspaceService workspaces,
         TabService tabs,
-        BrowserEngineRegistry engineRegistry,
+        BrowserRuntime runtime,
         AIService ai,
         SettingsService settingsService,
         ILogger<MainViewModel> log)
     {
         _workspaces = workspaces;
         _tabs = tabs;
-        _engineRegistry = engineRegistry;
+        _runtime = runtime;
         _ai = ai;
         _settingsService = settingsService;
         _log = log;
@@ -58,13 +58,23 @@ public sealed partial class MainViewModel : ObservableObject
         {
             ActiveWorkspace = workspaces.ActiveWorkspace;
             SelectedWorkspaceName = ActiveWorkspace?.Name ?? "Personal";
+            // Ghost every renderer in the previous workspace.
+            _ = _runtime.GhostAllAsync();
             _tabs.LoadForWorkspace(ActiveWorkspace!.Id);
             ActiveTab = _tabs.ActiveTab;
             AddressBarText = ActiveTab?.Url ?? "";
         };
 
         _tabs.TabOpened += (_, t) => { ActiveTab = _tabs.ActiveTab; AddressBarText = ActiveTab?.Url ?? ""; };
-        _tabs.TabClosed += (_, t) => { ActiveTab = _tabs.ActiveTab; AddressBarText = ActiveTab?.Url ?? ""; };
+        _tabs.TabClosed += (_, t) =>
+        {
+            // Renderer is already dropped before TabService.Close was called
+            // (by the UI close-button handler). As a safety net, drop it here
+            // too in case some other path triggered TabClosed.
+            _ = _runtime.GhostAsync(t.Id);
+            ActiveTab = _tabs.ActiveTab;
+            AddressBarText = ActiveTab?.Url ?? "";
+        };
         _tabs.ActiveTabChanged += (_, t) =>
         {
             ActiveTab = t;
@@ -84,16 +94,20 @@ public sealed partial class MainViewModel : ObservableObject
     public async Task NavigateAsync()
     {
         if (string.IsNullOrWhiteSpace(AddressBarText)) return;
-        var view = await GetOrCreateViewForActiveAsync();
-        if (view is null) return;
-        var resolved = await view.ResolveUrlAsync(AddressBarText);
+        if (ActiveTab is null) return;
+        var resolved = Encomm.Browser.Engine.Abstractions.OmniboxResolver.Resolve(
+            AddressBarText, _settingsService.Current.SearchProviderUrl);
         if (string.IsNullOrEmpty(resolved)) return;
-        await view.NavigateAsync(resolved!);
-        // Also update the active tab record to remember the URL.
-        if (ActiveTab is not null)
+        ActiveTab = ActiveTab with { Url = resolved!, LastInteractionUtc = DateTimeOffset.UtcNow };
+        _tabs.SetActive(ActiveTab);
+        try
         {
-            var updated = ActiveTab with { Url = resolved!, LastInteractionUtc = DateTimeOffset.UtcNow };
-            ReplaceActiveTabRecord(updated);
+            var view = await _runtime.GetOrCreateAsync(ActiveTab);
+            await view.NavigateAsync(resolved!);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Navigate failed for tab {Id}", ActiveTab.Id);
         }
     }
 
@@ -110,10 +124,13 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public void CloseActiveTab()
+    public async Task CloseActiveTabAsync()
     {
         if (ActiveTab is null) return;
-        _tabs.Close(ActiveTab);
+        var tab = ActiveTab;
+        // Drop the renderer FIRST (the real ghost), then remove the logical tab.
+        await _runtime.GhostAsync(tab.Id);
+        _tabs.Close(tab);
     }
 
     [RelayCommand]
@@ -134,29 +151,61 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     public async Task ReloadAsync()
     {
-        var view = await GetOrCreateViewForActiveAsync();
-        if (view is not null) await view.ReloadAsync();
+        if (ActiveTab is null) return;
+        if (!_runtime.HasView(ActiveTab.Id))
+        {
+            // Renderer doesn't exist (Ghost). Bring it back, then reload.
+            var view = await _runtime.WakeAsync(ActiveTab);
+            if (view is not null) await view.ReloadAsync();
+        }
+        else
+        {
+            var view = await _runtime.GetOrCreateAsync(ActiveTab);
+            await view.ReloadAsync();
+        }
     }
 
     [RelayCommand]
     public async Task StopAsync()
     {
-        var view = await GetOrCreateViewForActiveAsync();
-        if (view is not null) await view.StopAsync();
+        if (ActiveTab is null) return;
+        if (!_runtime.HasView(ActiveTab.Id)) return;
+        var view = await _runtime.GetOrCreateAsync(ActiveTab);
+        await view.StopAsync();
     }
 
     [RelayCommand]
     public async Task BackAsync()
     {
-        var view = await GetOrCreateViewForActiveAsync();
-        if (view is not null) await view.GoBackAsync();
+        if (ActiveTab is null) return;
+        if (!_runtime.HasView(ActiveTab.Id)) return;
+        var view = await _runtime.GetOrCreateAsync(ActiveTab);
+        await view.GoBackAsync();
     }
 
     [RelayCommand]
     public async Task ForwardAsync()
     {
-        var view = await GetOrCreateViewForActiveAsync();
-        if (view is not null) await view.GoForwardAsync();
+        if (ActiveTab is null) return;
+        if (!_runtime.HasView(ActiveTab.Id)) return;
+        var view = await _runtime.GetOrCreateAsync(ActiveTab);
+        await view.GoForwardAsync();
+    }
+
+    [RelayCommand]
+    public async Task SelectTabAsync(TabRecord tab)
+    {
+        if (tab is null) return;
+        _tabs.SetActive(tab);
+        // Materialize a renderer for the newly-active tab (lazy).
+        try
+        {
+            await _runtime.GetOrCreateAsync(tab);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Materialize renderer for tab {Id} failed", tab.Id);
+        }
     }
 
     [RelayCommand]
@@ -165,13 +214,6 @@ public sealed partial class MainViewModel : ObservableObject
         if (workspace is null) return;
         _workspaces.SwitchTo(workspace.Id);
         SelectedWorkspaceName = workspace.Name;
-    }
-
-    [RelayCommand]
-    public void SelectTab(TabRecord tab)
-    {
-        if (tab is null) return;
-        _tabs.SetActive(tab);
     }
 
     [RelayCommand]
@@ -192,23 +234,28 @@ public sealed partial class MainViewModel : ObservableObject
         ShowDeveloperSurfaces = Mode == "Developer";
     }
 
-    private async Task<IBrowserView?> GetOrCreateViewForActiveAsync()
-    {
-        if (ActiveTab is null) return null;
-        var view = _engineRegistry.GetOrCreate(ActiveTab);
-        if (view is null) return null;
-        if (((Encomm.Browser.Engine.WebView2.WebView2BrowserView)view).State == ViewLifecycleState.Ghost)
-            await view.WakeAsync();
-        return view;
-    }
-
-    private void ReplaceActiveTabRecord(TabRecord updated)
+    [RelayCommand]
+    public async Task GhostActiveTabAsync()
     {
         if (ActiveTab is null) return;
-        var idx = _tabs.Tabs.IndexOf(ActiveTab);
-        if (idx < 0) return;
-        _tabs.Tabs[idx] = updated;
-        ActiveTab = updated;
+        await _runtime.GhostAsync(ActiveTab.Id);
+        _tabs.SetRendererState(ActiveTab, TabRendererStateKind.Ghost);
+    }
+
+    [RelayCommand]
+    public async Task SleepActiveTabAsync()
+    {
+        if (ActiveTab is null) return;
+        var ok = await _runtime.SuspendAsync(ActiveTab.Id);
+        if (ok) _tabs.SetRendererState(ActiveTab, TabRendererStateKind.Warm);
+    }
+
+    [RelayCommand]
+    public void ToggleKeepAwakeActiveTab()
+    {
+        if (ActiveTab is null) return;
+        _tabs.ToggleKeepAwake(ActiveTab);
+        ActiveTab = _tabs.ActiveTab;
     }
 }
 

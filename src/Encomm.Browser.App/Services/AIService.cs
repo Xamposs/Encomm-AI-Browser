@@ -16,18 +16,18 @@ public sealed class AIService
 {
     private readonly IModelRouter _router;
     private readonly ISecretStore _secrets;
-    private readonly BrowserEngineRegistry _engineRegistry;
+    private readonly BrowserRuntime _runtime;
     private readonly ILogger<AIService> _log;
     private const string SecretName = "ai.primary";
 
     public bool IsConfigured => _router.IsConfigured;
     public string? CurrentProviderName { get; private set; }
 
-    public AIService(IModelRouter router, ISecretStore secrets, BrowserEngineRegistry engineRegistry, ILogger<AIService> log)
+    public AIService(IModelRouter router, ISecretStore secrets, BrowserRuntime runtime, ILogger<AIService> log)
     {
         _router = router;
         _secrets = secrets;
-        _engineRegistry = engineRegistry;
+        _runtime = runtime;
         _log = log;
     }
 
@@ -118,7 +118,7 @@ public sealed class AIService
     private async Task<PageContext?> ExtractAsync(TabRecord? tab)
     {
         if (tab is null) return null;
-        var view = _engineRegistry.GetOrCreate(tab);
+        var view = _runtime.HasView(tab.Id) ? await _runtime.GetOrCreateAsync(tab) : null;
         if (view is null) return null;
         return await view.ExtractPageContextAsync();
     }

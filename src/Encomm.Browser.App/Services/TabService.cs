@@ -4,21 +4,26 @@ using Encomm.Browser.Tabs;
 using Encomm.Browser.Memory;
 using Encomm.Browser.Core.Storage;
 using Microsoft.Extensions.Logging;
+
 namespace Encomm.Browser.App.Services;
 
 /// <summary>
-/// Central manager for logical tabs. Owns the in-memory map of tabs by
-/// id and persists them. The actual renderer instances are managed by
-/// the engine adapter (which is replaceable).
+/// Central manager for LOGICAL tabs. Owns the in-memory map of tabs and
+/// persists them. Does NOT own renderer state — that is
+/// `BrowserRuntime`'s job. `TabService` only manipulates the `TabRecord`
+/// domain shape; it never instantiates or touches `IBrowserView`.
+///
+/// Omnibox resolution uses the engine-independent `OmniboxResolver` so
+/// creating a new tab allocates zero renderer resources.
 /// </summary>
 public sealed class TabService
 {
     private readonly BrowserPersistenceService _persistence;
-    private readonly IBrowserEngine _engine;
     private readonly ILogger<TabService> _log;
     private readonly Dictionary<Guid, TabRecord> _byId = new();
     private readonly LinkedList<RecentlyClosedRecord> _recentlyClosed = new();
     private const int RecentlyClosedLimit = 25;
+    private string _searchProviderUrl = "https://duckduckgo.com/?q={q}";
 
     public ObservableCollection<TabRecord> Tabs { get; } = new();
     public TabRecord? ActiveTab { get; private set; }
@@ -27,12 +32,13 @@ public sealed class TabService
     public event EventHandler<TabRecord>? TabClosed;
     public event EventHandler<TabRecord?>? ActiveTabChanged;
 
-    public TabService(BrowserPersistenceService persistence, IBrowserEngine engine, ILogger<TabService> log)
+    public TabService(BrowserPersistenceService persistence, ILogger<TabService> log)
     {
         _persistence = persistence;
-        _engine = engine;
         _log = log;
     }
+
+    public void ConfigureSearchProvider(string url) => _searchProviderUrl = url;
 
     public void LoadForWorkspace(Guid workspaceId)
     {
@@ -51,18 +57,14 @@ public sealed class TabService
         ActiveTabChanged?.Invoke(this, ActiveTab);
     }
 
-    public async Task<TabRecord> OpenNewAsync(string url, bool switchTo = true, CancellationToken ct = default)
+    public Task<TabRecord> OpenNewAsync(string url, bool switchTo = true, CancellationToken ct = default)
     {
-        // Normalize url through the omnibox resolver via the engine (when available)
-        IBrowserView? probe = null;
-        try
-        {
-            probe = await _engine.CreateViewAsync(Guid.Empty, ct).ConfigureAwait(false);
-        }
-        catch { probe = null; }
-        var resolved = probe is not null ? await probe.ResolveUrlAsync(url, ct).ConfigureAwait(false) : null;
+        // Resolve via the engine-independent OmniboxResolver. We do NOT
+        // create any view here — the tab is a metadata-only logical record
+        // until something actually wants to render it.
+        var resolved = OmniboxResolver.Resolve(url, _searchProviderUrl);
         var final = string.IsNullOrEmpty(resolved) ? url : resolved;
-        if (probe is not null) await probe.DisposeAsync().ConfigureAwait(false);
+
         var tab = new TabRecord(
             Guid.NewGuid(), WorkspaceIdOfActive(), final, "", null,
             TabRendererStateKind.Ghost, TabLogicalStateKind.Background,
@@ -73,7 +75,8 @@ public sealed class TabService
         _persistence.SaveTab(tab);
         if (switchTo) SetActive(tab);
         TabOpened?.Invoke(this, tab);
-        return tab;
+        _log.LogInformation("Tab opened: {Id} url={Url}", tab.Id, tab.Url);
+        return Task.FromResult(tab);
     }
 
     public Guid WorkspaceIdOfActive()
@@ -85,14 +88,17 @@ public sealed class TabService
     public void SetActive(TabRecord tab)
     {
         if (tab is null) return;
-        // Mark previous as background, new as active.
         if (ActiveTab is not null && ActiveTab.Id != tab.Id)
         {
-            var prev = ActiveTab;
-            prev = prev with { LogicalState = TabLogicalStateKind.Background, LastInteractionUtc = DateTimeOffset.UtcNow };
+            var prev = ActiveTab with { LogicalState = TabLogicalStateKind.Background };
             ReplaceTab(prev);
         }
-        var updated = tab with { LogicalState = TabLogicalStateKind.Active, LastInteractionUtc = DateTimeOffset.UtcNow, RendererState = TabRendererStateKind.Live };
+        var updated = tab with
+        {
+            LogicalState = TabLogicalStateKind.Active,
+            LastInteractionUtc = DateTimeOffset.UtcNow,
+            RendererState = TabRendererStateKind.Live
+        };
         ReplaceTab(updated);
         ActiveTab = updated;
         _persistence.SaveTab(updated);
@@ -100,10 +106,14 @@ public sealed class TabService
         ActiveTabChanged?.Invoke(this, updated);
     }
 
+    /// <summary>
+    /// Close a logical tab. The renderer (if any) must be destroyed by the
+    /// caller via `BrowserRuntime.GhostAsync` BEFORE calling this method;
+    /// `TabService` does not touch renderers.
+    /// </summary>
     public void Close(TabRecord tab)
     {
         if (tab is null) return;
-        // Record recently closed
         var rec = new RecentlyClosedRecord(tab.Id, tab.Url, tab.Title, tab.WorkspaceId, DateTimeOffset.UtcNow);
         _persistence.SaveRecentlyClosed(rec);
         _recentlyClosed.AddFirst(rec);
@@ -134,7 +144,14 @@ public sealed class TabService
 
     public TabRecord Duplicate(TabRecord tab)
     {
-        var dup = tab with { Id = Guid.NewGuid(), RendererState = TabRendererStateKind.Ghost, OrderIndex = Tabs.Count, CreatedUtc = DateTimeOffset.UtcNow, LastInteractionUtc = DateTimeOffset.UtcNow };
+        var dup = tab with
+        {
+            Id = Guid.NewGuid(),
+            RendererState = TabRendererStateKind.Ghost,
+            OrderIndex = Tabs.Count,
+            CreatedUtc = DateTimeOffset.UtcNow,
+            LastInteractionUtc = DateTimeOffset.UtcNow
+        };
         Tabs.Add(dup);
         _byId[dup.Id] = dup;
         _persistence.SaveTab(dup);
@@ -142,30 +159,19 @@ public sealed class TabService
         return dup;
     }
 
-    public void TogglePin(TabRecord tab)
+    public void TogglePin(TabRecord tab) => UpdateFlag(tab, t => t with { Pinned = !t.Pinned });
+    public void ToggleMute(TabRecord tab) => UpdateFlag(tab, t => t with { Muted = !t.Muted });
+    public void ToggleKeepAwake(TabRecord tab) => UpdateFlag(tab, t => t with { KeepAwake = !t.KeepAwake });
+
+    public void SetRendererState(TabRecord tab, TabRendererStateKind state)
     {
-        var updated = tab with { Pinned = !tab.Pinned };
-        ReplaceTab(updated);
-        _persistence.SaveTab(updated);
+        UpdateFlag(tab, t => t with { RendererState = state });
     }
 
-    public void ToggleMute(TabRecord tab)
+    private void UpdateFlag(TabRecord tab, Func<TabRecord, TabRecord> mutate)
     {
-        var updated = tab with { Muted = !tab.Muted };
-        ReplaceTab(updated);
-        _persistence.SaveTab(updated);
-    }
-
-    public void ToggleKeepAwake(TabRecord tab)
-    {
-        var updated = tab with { KeepAwake = !tab.KeepAwake };
-        ReplaceTab(updated);
-        _persistence.SaveTab(updated);
-    }
-
-    public void Ghost(TabRecord tab)
-    {
-        var updated = tab with { RendererState = TabRendererStateKind.Ghost };
+        if (tab is null) return;
+        var updated = mutate(tab);
         ReplaceTab(updated);
         _persistence.SaveTab(updated);
     }
@@ -216,6 +222,25 @@ public sealed class TabService
     }
 
     public IEnumerable<TabRecord> TabsInCurrentWorkspace() => Tabs;
+
+    /// <summary>
+    /// Replace the title on a tab. Used by the BrowserRuntime to surface
+    /// `TitleChanged` events without holding a mutable reference.
+    /// </summary>
+    public void MutateTitle(Guid tabId, string newTitle)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        if (tab.Title == newTitle) return;
+        ReplaceTab(tab with { Title = newTitle });
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void MutateNavigationCompleted(Guid tabId, string url)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        ReplaceTab(tab with { Url = url, LastInteractionUtc = DateTimeOffset.UtcNow });
+        _persistence.SaveTab(_byId[tabId]);
+    }
 }
 
 /// <summary>

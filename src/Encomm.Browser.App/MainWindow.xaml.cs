@@ -42,7 +42,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                var path = Path.Combine(Encomm.Browser.Core.BrowserPaths.Default().LogsDirectory, "encomm.callback-fatal.txt");
+                var path = Path.Combine(Encomm.Browser.Core.BrowserPaths.Default().LogsDirectory, "encomm.mainwindow-fatal.txt");
                 File.WriteAllText(path, ex.ToString());
             }
             catch { }
@@ -96,24 +96,35 @@ public sealed partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case VirtualKey.F12:
-                var tab = ViewModel.ActiveTab;
-                if (tab is not null)
+                if (ViewModel.ActiveTab is not null)
                 {
-                    var registry = App.Services.GetRequiredService<BrowserEngineRegistry>();
-                    var view = registry.GetOrCreate(tab);
-                    if (view is not null) _ = view.OpenDevToolsAsync();
+                    var runtime = App.Services.GetRequiredService<BrowserRuntime>();
+                    if (runtime.HasView(ViewModel.ActiveTab.Id))
+                    {
+                        _ = runtime.GetOrCreateAsync(ViewModel.ActiveTab).ContinueWith(t =>
+                        {
+                            if (t.Result is { } v) _ = v.OpenDevToolsAsync();
+                        });
+                    }
                 }
                 e.Handled = true;
                 break;
         }
     }
 
-    private void OnTabCloseClick(object sender, RoutedEventArgs e)
+    private async void OnTabCloseClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.Tag is Guid id)
         {
             var tab = ViewModel.Tabs.FirstOrDefault(t => t.Id == id);
-            if (tab is not null) ViewModel.Tabs.Remove(tab);
+            if (tab is null) return;
+            // Destroy the renderer FIRST, then close the logical tab.
+            var runtime = App.Services.GetRequiredService<BrowserRuntime>();
+            await runtime.GhostAsync(tab.Id);
+            ViewModel.Tabs.Remove(tab); // removes from ObservableCollection
+            // TabService.Close also fires; it is idempotent for already-removed tabs.
+            // The ViewModel above is the source of truth for the UI list.
+            App.Services.GetRequiredService<TabService>().Close(tab);
         }
     }
 
