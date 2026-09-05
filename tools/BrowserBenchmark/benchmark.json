@@ -1,0 +1,74 @@
+{
+  "Machine": {
+    "OsVersion": "Microsoft Windows NT 10.0.19045.0",
+    "ProcessorCount": 32,
+    "RuntimeVersion": "9.0.17"
+  },
+  "Scenarios": [
+    {
+      "TabCount": 1,
+      "CreationMs": 3.7953,
+      "AfterCreateHostBytes": 39579648,
+      "AfterCreateHostPrivateBytes": 10498048,
+      "AfterActiveHostBytes": 39579648,
+      "AfterActiveHostPrivateBytes": 10498048,
+      "TotalTabs": 0,
+      "LiveTabs": 0,
+      "WarmTabs": 0,
+      "GhostTabs": 0,
+      "Notes": null
+    },
+    {
+      "TabCount": 10,
+      "CreationMs": 0.6779,
+      "AfterCreateHostBytes": 39440384,
+      "AfterCreateHostPrivateBytes": 10240000,
+      "AfterActiveHostBytes": 39440384,
+      "AfterActiveHostPrivateBytes": 10240000,
+      "TotalTabs": 0,
+      "LiveTabs": 0,
+      "WarmTabs": 0,
+      "GhostTabs": 0,
+      "Notes": null
+    },
+    {
+      "TabCount": 25,
+      "CreationMs": 1.6737,
+      "AfterCreateHostBytes": 39596032,
+      "AfterCreateHostPrivateBytes": 10375168,
+      "AfterActiveHostBytes": 39596032,
+      "AfterActiveHostPrivateBytes": 10375168,
+      "TotalTabs": 0,
+      "LiveTabs": 0,
+      "WarmTabs": 0,
+      "GhostTabs": 0,
+      "Notes": null
+    },
+    {
+      "TabCount": 50,
+      "CreationMs": 3.6958,
+      "AfterCreateHostBytes": 39923712,
+      "AfterCreateHostPrivateBytes": 10571776,
+      "AfterActiveHostBytes": 39923712,
+      "AfterActiveHostPrivateBytes": 10571776,
+      "TotalTabs": 0,
+      "LiveTabs": 0,
+      "WarmTabs": 0,
+      "GhostTabs": 0,
+      "Notes": null
+    },
+    {
+      "TabCount": 100,
+      "CreationMs": 7.9687,
+      "AfterCreateHostBytes": 40341504,
+      "AfterCreateHostPrivateBytes": 11100160,
+      "AfterActiveHostBytes": 40341504,
+      "AfterActiveHostPrivateBytes": 11100160,
+      "TotalTabs": 0,
+      "LiveTabs": 0,
+      "WarmTabs": 0,
+      "GhostTabs": 0,
+      "Notes": null
+    }
+  ]
+}
