@@ -257,12 +257,20 @@ The following 10 items are the highest-value work for Phase 2:
 
 ## Commits
 
-Local commit on `main` (created via `git init -b main`) that captures
-the full Phase 1 codebase. The remote is configured to
-`https://github.com/Xamposs/Encomm-AI-Browser` and **must not be
-pushed** while the remote is public. When the repository is made
-private, the local commit can be pushed with `git push -u origin main`.
+Local commits on `main` (created via `git init -b main`) capture the
+full Phase 1 codebase. The remote
+`https://github.com/Xamposs/Encomm-AI-Browser` was set up and the
+**owner explicitly authorized pushing source code to the public
+remote** during Phase 2A; the local commits are now mirrored on
+`origin/main`.
 
 ```
+e93dc7a chore: initialize native browser solution (Phase 1)
+b061079 docs: write phase 1 report
+```
+
+> **Status (post-Phase-2A):** the remote is public and `origin/main`
+> has been updated with Phase 1 + Phase 2A work. See
+> `docs/PHASE_2A_REPORT.md` for what the next phase did.
 e93dc7a chore: initialize native browser solution (Phase 1)
 ```

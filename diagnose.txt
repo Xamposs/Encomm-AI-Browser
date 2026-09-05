@@ -1,0 +1,90 @@
+﻿=== Encomm AI Browser diagnostic report ===
+Generated: 2026-09-05T03:55:55.0531881+03:00
+User: xampos
+
+--- OS ---
+Caption:           Microsoft Windows 10 Pro
+Version:           10.0.19045
+Architecture:      AMD64
+Processors:        32
+
+--- .NET ---
+dotnet --version:    9.0.315
+dotnet --list-sdks:
+  9.0.315 [C:\Program Files\dotnet\sdk]
+dotnet --list-runtimes (win):
+  Microsoft.WindowsDesktop.App 9.0.17 [C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App]
+
+--- WebView2 runtime ---
+WebView2 runtime version: 152.0.4191.62 (from HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5})
+WebView2 install dir: C:\Program Files (x86)\Microsoft\EdgeWebView\Application\SetupMetrics
+
+--- Windows App Runtime packages ---
+Get-AppxPackage failed: Access is denied.
+
+Access is denied.
+
+
+--- Encomm build ---
+Repo root:          C:\Users\xampos\Desktop\Projects\Encomm-AI-Browser
+Encomm app csproj:  C:\Users\xampos\Desktop\Projects\Encomm-AI-Browser\src\Encomm.Browser.App\Encomm.Browser.App.csproj
+WindowsAppSDK: 2.2.0
+WebView2:        1.0.3719.77
+
+--- Encomm logs (last 50 lines) ---
+  2026-09-04 19:20:32.083 [2] Bootstrap (WinAppSDK 1.7 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:20:32.090 [2] Bootstrap (WinAppSDK 1.6 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:20:32.097 [2] Bootstrap (WinAppSDK 1.8 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:20:32.104 [2] Bootstrap (WinAppSDK 1.7 preview) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:20:32.112 [2] Bootstrap (WinAppSDK 1.8 preview) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:20:32.112 [2] ComWrappers initialized. Starting XAML Application.
+  2026-09-04 19:20:32.197 [2] XAML Application callback running.
+  2026-09-04 19:20:32.475 +03:00 [Information] Encomm.Browser.App.App: App starting.
+  2026-09-04 19:20:32.647 +03:00 [Information] Encomm.Browser.App.App: Workspace context wired.
+  2026-09-04 19:20:32.647 [2] App instance created successfully.
+  2026-09-04 19:35:23.231 [2] === Encomm AI Browser startup ===
+  2026-09-04 19:35:23.242 [2] Process: 31596, args=[]
+  2026-09-04 19:35:23.242 [2] DLL search path: C:\Users\xampos\Desktop\Projects\Encomm-AI-Browser\src\Encomm.Browser.App\bin\Release\net9.0-windows10.0.19041.0\win-x64\
+  2026-09-04 19:35:23.243 [2] WindowsAppRuntime_EnsureIsLoaded hr=0x00000000
+  2026-09-04 19:35:23.247 [2] WebView2 runtime: 152.0.4191.62
+  2026-09-04 19:35:23.260 [2] Bootstrap (WinAppSDK 2.4 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:35:23.268 [2] Bootstrap (WinAppSDK 2.3 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:35:23.275 [2] Bootstrap (WinAppSDK 2.4 preview) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:35:23.282 [2] Bootstrap (WinAppSDK 2.3 preview) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:35:23.283 [2] ComWrappers initialized. Starting XAML Application.
+  2026-09-04 19:35:23.331 [2] XAML Application callback running.
+  2026-09-04 19:35:23.371 +03:00 [Information] Encomm.Browser.App.App: App starting.
+  2026-09-04 19:35:23.461 +03:00 [Information] Encomm.Browser.App.App: Workspace context wired.
+  2026-09-04 19:35:23.462 [2] App instance created successfully.
+  2026-09-04 19:43:05.299 [2] === Encomm AI Browser startup ===
+  2026-09-04 19:43:05.309 [2] Process: 9732, args=[]
+  2026-09-04 19:43:05.310 [2] DLL search path: C:\Users\xampos\Desktop\Projects\Encomm-AI-Browser\src\Encomm.Browser.App\bin\Release\net9.0-windows10.0.19041.0\win-x64\
+  2026-09-04 19:43:05.310 [2] WindowsAppRuntime_EnsureIsLoaded hr=0x00000000
+  2026-09-04 19:43:05.315 [2] WebView2 runtime: 152.0.4191.62
+  2026-09-04 19:43:05.332 [2] Bootstrap (WinAppSDK 2.2 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:43:05.339 [2] Bootstrap (WinAppSDK 2.2 preview) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 19:43:05.340 [2] ComWrappers initialized. Starting XAML Application.
+  2026-09-04 19:43:05.399 [2] XAML Application callback running.
+  2026-09-04 19:43:05.441 +03:00 [Information] Encomm.Browser.App.App: App starting.
+  2026-09-04 19:43:05.511 +03:00 [Information] Encomm.Browser.App.App: Workspace context wired.
+  2026-09-04 19:43:05.511 [2] App instance created successfully.
+  2026-09-04 20:13:05.565 +03:00 [Information] Encomm.Browser.App.App: App starting.
+  2026-09-04 20:13:05.647 +03:00 [Information] Encomm.Browser.App.App: Workspace context wired.
+  2026-09-04 20:28:46.060 [2] === Encomm AI Browser startup ===
+  2026-09-04 20:28:46.071 [2] Process: 17168, args=[]
+  2026-09-04 20:28:46.072 [2] DLL search path: C:\Users\xampos\Desktop\Projects\Encomm-AI-Browser\src\Encomm.Browser.App\bin\Release\net9.0-windows10.0.19041.0\win-x64\
+  2026-09-04 20:28:46.073 [2] WindowsAppRuntime_EnsureIsLoaded hr=0x00000000
+  2026-09-04 20:28:46.077 [2] WebView2 runtime: 152.0.4191.62
+  2026-09-04 20:28:46.089 [2] Bootstrap (WinAppSDK 2.2 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 20:28:46.097 [2] Bootstrap (WinAppSDK 1.7 release) ok=False hr=0x80670016 options=OnPackageIdentity_NOOP
+  2026-09-04 20:28:46.097 [2] ComWrappers initialized. Starting XAML Application.
+  2026-09-04 20:28:46.145 [2] XAML Application callback running.
+  2026-09-04 20:28:46.184 +03:00 [Information] Encomm.Browser.App.App: App starting.
+  2026-09-04 20:28:46.271 +03:00 [Information] Encomm.Browser.App.App: Workspace context wired.
+  2026-09-04 20:28:46.271 [2] App instance created successfully.
+
+--- Tools ---
+git --version:  git version 2.55.0.windows.3
+node --version: v22.22.3
+
+=== End of report ===
