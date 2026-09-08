@@ -47,6 +47,7 @@
                           ItemsSource="{x:Bind ViewModel.Workspaces}"
                           SelectedItem="{x:Bind ViewModel.ActiveWorkspace, Mode=OneWay}"
                           DisplayMemberPath="Name"
+                          SelectionChanged="OnWorkspaceSelectionChanged"
                           ToolTipService.ToolTip="Active workspace" />
 
                 <TextBox Grid.Column="7"
@@ -65,6 +66,10 @@
                             <MenuFlyoutSeparator />
                             <MenuFlyoutItem Text="Pin / Unpin Active" Command="{x:Bind ViewModel.PinActiveTabCommand}" />
                             <MenuFlyoutItem Text="Duplicate Active" Command="{x:Bind ViewModel.DuplicateActiveTabCommand}" />
+                            <MenuFlyoutItem Text="Sleep Active" Command="{x:Bind ViewModel.SleepActiveTabCommand}" />
+                            <MenuFlyoutItem Text="Ghost Active" Command="{x:Bind ViewModel.GhostActiveTabCommand}" />
+                            <MenuFlyoutItem Text="Keep Awake Active" Command="{x:Bind ViewModel.ToggleKeepAwakeActiveTabCommand}" />
+                            <MenuFlyoutItem Text="Close Active" Command="{x:Bind ViewModel.CloseActiveTabCommand}" />
                             <MenuFlyoutSeparator />
                             <ToggleMenuFlyoutItem x:Name="DeveloperModeItem" Text="Developer Mode" Click="OnToggleDeveloperMode" />
                             <MenuFlyoutItem Text="Open Settings..." Click="OnOpenSettings" />
@@ -87,16 +92,25 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="tabs:TabRecord">
+                            <!--
+                                The whole tab body selects the tab.
+                                The X button stops event propagation so it
+                                does not also trigger selection.
+                            -->
                             <Border CornerRadius="6"
                                     Padding="8,4"
                                     BorderThickness="1"
                                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                                    Background="{ThemeResource LayerFillColorDefaultBrush}">
+                                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                    Tapped="OnTabBodyTapped"
+                                    Tag="{x:Bind Id}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <TextBlock Text="&#x1F4CC;" Visibility="{Binding Pinned}" FontSize="11" />
                                     <TextBlock Text="&#x1F507;" Visibility="{Binding Muted}" FontSize="11" />
                                     <TextBlock Text="{x:Bind Title}" Width="160" TextTrimming="CharacterEllipsis" />
-                                    <Button Content="x" Padding="2" Click="OnTabCloseClick" Tag="{x:Bind Id}" />
+                                    <Button Content="x" Padding="2"
+                                            Click="OnTabCloseClick"
+                                            Tag="{x:Bind Id}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
@@ -108,12 +122,6 @@
         <!-- Content / active tab view -->
         <Grid Grid.Row="2">
             <controls:BrowserHostControl x:Name="Host" />
-            <TextBlock x:Name="StatusOverlay"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Bottom"
-                       Margin="0,0,0,12"
-                       Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                       Visibility="Collapsed" />
         </Grid>
 
         <!-- Status bar -->

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Encomm.Browser.Engine.Abstractions;
 using Encomm.Browser.Core.Storage;
@@ -9,43 +10,86 @@ namespace Encomm.Browser.App.Services;
 /// Authoritative owner of the WebView2 runtime.
 ///
 /// Responsibilities:
-///   * Lazily create the single shared CoreWebView2Environment.
+///   * Lazily create the single shared engine (exactly once).
 ///   * Own the per-tab renderer dictionary (renderer-instance lifecycle).
 ///   * Create, suspend, resume, and ghost renderers for logical tabs.
-///   * Drive real renderer-level operations (TrySuspendAsync / Close / Dispose)
-///     when lifecycle state changes — NEVER just toggle an enum.
+///   * Drive real renderer-level operations when lifecycle state changes.
+///   * Marshal every WinUI-touching call onto the application UI thread
+///     via the injected <see cref="IUiDispatcher"/>.
 ///
-/// `TabService` is responsible for logical tab state (URL, title, pinned, ...).
-/// `BrowserRuntime` is responsible for renderer state.
-/// `TabLifecycleManager` is responsible for deciding WHEN to transition.
+/// `TabService` owns logical tab state. `BrowserRuntime` owns renderer
+/// state. `TabLifecycleManager` decides WHEN to transition.
 /// </summary>
-public sealed class BrowserRuntime : IAsyncDisposable
+public class BrowserRuntime : IAsyncDisposable
 {
     private readonly IRequestBlocker _blocker;
     private readonly ILogger<BrowserRuntime> _log;
     private readonly TabService _tabService;
-    private readonly Func<BrowserRuntime, Task<IBrowserEngine>> _engineFactory;
+    private readonly WebView2EngineFactory _engineFactory;
+    private IUiDispatcher _ui;
     private readonly object _initGate = new();
     private readonly Dictionary<Guid, IBrowserView> _views = new();
     private readonly object _viewsGate = new();
     private Task<IBrowserEngine>? _initTask;
     private bool _disposed;
 
+    /// <summary>
+    /// Optional permission prompt. Set by the UI layer (which owns a
+    /// XamlRoot). Return true to Allow, false to Deny. When null, all
+    /// sensitive permission requests are denied and logged.
+    /// </summary>
+    public Func<PermissionKind, string, Task<bool>>? PermissionPromptAsync { get; set; }
+
+    /// <summary>
+    /// Optional download prompt. Set by the UI layer. The handler receives
+    /// the suggested file name and download URL and returns the accepted
+    /// local path, or null to cancel.
+    /// </summary>
+    public Func<string, string, Task<string?>>? DownloadPromptAsync { get; set; }
+
+    /// <summary>
+    /// Optional new-window handler. Set by the UI layer. Receives the URL
+    /// and whether the request was user-initiated. The default opens
+    /// user-initiated requests as background tabs and declines the rest.
+    /// </summary>
+    public Func<string, bool, Task>? NewWindowHandlerAsync { get; set; }
+
+    /// <summary>Last Ghost-restore total latency, for diagnostics.</summary>
+    public TimeSpan LastRestoreLatency { get; private set; }
+
+    /// <summary>Last suspend / resume latency, for diagnostics.</summary>
+    public TimeSpan LastSuspendLatency { get; private set; }
+    public TimeSpan LastResumeLatency { get; private set; }
+
+    /// <summary>
+    /// When the total process-tree memory exceeds this threshold,
+    /// the lifecycle treats unprotected tabs as Ghost candidates early
+    /// (Adaptive preset). 0 disables the check.
+    /// </summary>
+    public long MemoryPressureThresholdBytes { get; set; } = 0;
+
     public BrowserRuntime(
         IRequestBlocker blocker,
         ILogger<BrowserRuntime> log,
         TabService tabService,
-        Func<BrowserRuntime, Task<IBrowserEngine>> engineFactory)
+        WebView2EngineFactory engineFactory,
+        IUiDispatcher ui)
     {
         _blocker = blocker;
         _log = log;
         _tabService = tabService;
         _engineFactory = engineFactory;
+        _ui = ui;
     }
 
-    /// <summary>
-    /// Idempotent. Multiple callers see the same Task; the engine is created once.
-    /// </summary>
+    public IUiDispatcher Ui => _ui;
+
+    public void AttachUiDispatcher(IUiDispatcher dispatcher)
+    {
+        if (dispatcher is null) throw new ArgumentNullException(nameof(dispatcher));
+        _ui = dispatcher;
+    }
+
     public Task<IBrowserEngine> InitializeAsync(CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(BrowserRuntime));
@@ -53,7 +97,7 @@ public sealed class BrowserRuntime : IAsyncDisposable
         {
             if (_initTask is null)
             {
-                _initTask = _engineFactory(this);
+                _initTask = _engineFactory.CreateAsync(this, ct);
             }
         }
         return _initTask;
@@ -61,25 +105,25 @@ public sealed class BrowserRuntime : IAsyncDisposable
 
     public bool IsReady => _initTask is { IsCompletedSuccessfully: true };
 
-    public IReadOnlyDictionary<Guid, IBrowserView> Views
+    public virtual IReadOnlyDictionary<Guid, IBrowserView> Views
     {
         get { lock (_viewsGate) return new Dictionary<Guid, IBrowserView>(_views); }
     }
 
-    /// <summary>
-    /// Collect the WebView2 child process tree of the current engine.
-    /// Returns an empty list if the engine does not expose process info
-    /// (e.g. before the engine is ready, or for non-WebView2 adapters).
-    /// </summary>
-    public IReadOnlyList<WebViewProcessInfo> GetWebViewProcessInfos()
+    public virtual IReadOnlyList<WebViewProcessInfo> GetWebViewProcessInfos()
     {
         if (_initTask is null || !_initTask.IsCompletedSuccessfully) return Array.Empty<WebViewProcessInfo>();
         var engine = _initTask.Result;
         return engine.GetWebViewProcessInfos();
     }
 
-    /// <summary>Get a live view for the tab, creating it if needed. Lazy.</summary>
-    public async Task<IBrowserView> GetOrCreateAsync(TabRecord tab, CancellationToken ct = default)
+    /// <summary>
+    /// Get or create a fully-initialized live renderer for the tab.
+    /// The engine adapter initializes the control; this method only
+    /// registers the view and wires the event bridge. WinUI control
+    /// creation happens on the UI thread.
+    /// </summary>
+    public async Task<IBrowserView?> GetOrCreateAsync(TabRecord tab, CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(BrowserRuntime));
         if (tab is null) throw new ArgumentNullException(nameof(tab));
@@ -88,36 +132,104 @@ public sealed class BrowserRuntime : IAsyncDisposable
         {
             if (_views.TryGetValue(tab.Id, out var existing)) return existing;
         }
-        var engine = await InitializeAsync(ct).ConfigureAwait(false);
-        var view = await engine.CreateViewAsync(tab.Id, ct).ConfigureAwait(false);
-        if (view is null) throw new InvalidOperationException("Engine returned null view");
-        // Bridge the renderer's events to the logical tab so the tab record
-        // gets its URL/title/favicon kept up to date.
-        AttachViewEventBridge(tab, view);
-        lock (_viewsGate) _views[tab.Id] = view;
-        _log.LogInformation("Renderer created for tab {Id} url={Url}", tab.Id, tab.Url);
-        return view;
+        try
+        {
+            var engine = await InitializeAsync(ct).ConfigureAwait(false);
+            // Engine adapter implementations create WinUI controls, which
+            // require the UI thread. Marshal the whole creation there.
+            var view = await _ui.RunAsync(() => engine.CreateViewAsync(tab.Id, ct)).ConfigureAwait(false);
+            if (view is null) throw new InvalidOperationException("Engine returned null view");
+            AttachViewEventBridge(tab, view);
+            lock (_viewsGate) _views[tab.Id] = view;
+            _log.LogInformation("Renderer created for tab {Id} url={Url}", tab.Id, tab.Url);
+            return view;
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Failed to create renderer for tab {Id}", tab.Id);
+            return null;
+        }
     }
 
     private void AttachViewEventBridge(TabRecord tab, IBrowserView view)
     {
-        view.TitleChanged += (_, e) =>
+        view.TitleChanged += (_, e) => _ui.Post(() => _tabService.TryMutateTitle(tab.Id, e.Title));
+        view.NavigationCompleted += (_, e) => _ui.Post(() => _tabService.MutateNavigationCompleted(tab.Id, e.Url));
+        view.FaviconChanged += (_, e) => _ui.Post(() => _tabService.MutateFavicon(tab.Id, e.Url));
+        view.LoadingStateChanged += (_, e) => _ui.Post(() => _tabService.MutateLoadingState(tab.Id, e.IsLoading));
+        view.AudioStateChanged += (_, e) => _ui.Post(() => _tabService.MutateAudioState(tab.Id, e.Playing));
+        view.NavigationStarting += (_, e) => _ui.Post(() => _tabService.MutateLastInteractionUtc(tab.Id));
+        view.RenderError += (_, e) => _log.LogWarning("Tab {Id} render error: {Msg}", tab.Id, e.Message);
+
+        view.PermissionRequested += (_, e) => _ui.Post(() => _ = DecidePermissionAsync(tab, e));
+        view.DownloadRequested += (_, e) => _ui.Post(() => _ = DecideDownloadAsync(tab, e));
+        view.NewWindowRequested += (_, e) => _ui.Post(() => _ = HandleNewWindowAsync(tab, e));
+    }
+
+    private async Task DecidePermissionAsync(TabRecord tab, PermissionRequestEventArgs e)
+    {
+        try
         {
-            // TabRecord's mutability is restricted; the canonical way to
-            // change fields is via `TabService`. We dispatch to the UI
-            // thread so the property change happens on the dispatcher.
-            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()?.TryEnqueue(() =>
+            if (PermissionPromptAsync is not null)
             {
-                _tabService.MutateTitle(tab.Id, e.Title);
-            });
-        };
-        view.NavigationCompleted += (_, e) =>
+                var allow = await PermissionPromptAsync(e.Kind, e.Origin).ConfigureAwait(false);
+                if (allow) e.Allow(); else e.Deny();
+                _log.LogInformation("Permission {Kind} for {Origin}: {Decision}", e.Kind, e.Origin, allow ? "allow" : "deny");
+                return;
+            }
+        }
+        catch (Exception ex)
         {
-            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()?.TryEnqueue(() =>
+            _log.LogWarning(ex, "Permission prompt failed; denying {Kind}", e.Kind);
+        }
+        // Default conservative policy: deny sensitive permissions.
+        e.Deny();
+    }
+
+    private async Task DecideDownloadAsync(TabRecord tab, DownloadEventArgs e)
+    {
+        try
+        {
+            if (DownloadPromptAsync is not null)
             {
-                _tabService.MutateNavigationCompleted(tab.Id, e.Url);
-            });
-        };
+                var accepted = await DownloadPromptAsync(e.SuggestedFileName, e.Url).ConfigureAwait(false);
+                if (accepted is not null) e.Accept(accepted); else e.Decline();
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Download prompt failed; accepting default location");
+        }
+        // No UI prompt wired: accept the engine default location.
+        e.Accept(e.SuggestedFileName);
+    }
+
+    private async Task HandleNewWindowAsync(TabRecord source, NewWindowRequestEventArgs e)
+    {
+        try
+        {
+            if (NewWindowHandlerAsync is not null)
+            {
+                await NewWindowHandlerAsync(e.Url, e.IsUserInitiated).ConfigureAwait(false);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "New-window handler failed for {Url}", e.Url);
+        }
+        // Default policy: open user-initiated requests as background tabs,
+        // decline the rest to prevent unsolicited popup abuse.
+        if (e.IsUserInitiated && Uri.TryCreate(e.Url, UriKind.Absolute, out _))
+        {
+            try { await _tabService.OpenNewAsync(e.Url, switchTo: false).ConfigureAwait(false); }
+            catch (Exception ex) { _log.LogWarning(ex, "Failed to open popup tab {Url}", e.Url); }
+        }
+        else
+        {
+            e.Decline();
+        }
     }
 
     public bool HasView(Guid tabId)
@@ -125,24 +237,40 @@ public sealed class BrowserRuntime : IAsyncDisposable
         lock (_viewsGate) return _views.ContainsKey(tabId);
     }
 
-    /// <summary>
-    /// Suspend the renderer for the tab (Warm). Returns true on success.
-    /// No-op if no view exists. No-op if the view is already Live (it cannot
-    /// suspend a Live view without first becoming a candidate, which is the
-    /// caller's responsibility to decide).
-    /// </summary>
     public async Task<bool> SuspendAsync(Guid tabId, CancellationToken ct = default)
     {
         IBrowserView? view;
-        lock (_viewsGate)
-        {
-            _views.TryGetValue(tabId, out view);
-        }
+        lock (_viewsGate) _views.TryGetValue(tabId, out view);
         if (view is null) return false;
+        var sw = Stopwatch.StartNew();
         try
         {
-            await view.SuspendAsync(ct).ConfigureAwait(false);
-            return view.State == ViewLifecycleState.Warm;
+            var ctx = await view.ExtractPageContextAsync(ct).ConfigureAwait(false);
+            _ui.Post(() => _tabService.UpdatePageContext(tabId, ctx));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Suspend pre-save failed for tab {Id}", tabId);
+        }
+        try
+        {
+            var ok = await view.SuspendAsync(ct).ConfigureAwait(false);
+            LastSuspendLatency = sw.Elapsed;
+            if (ok && view.State == ViewLifecycleState.Warm)
+            {
+                try
+                {
+                    var (sx, sy) = await view.GetScrollAsync(ct).ConfigureAwait(false);
+                    _ui.Post(() => _tabService.MutateScroll(tabId, sx, sy));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogDebug(ex, "Suspend scroll save failed for tab {Id}", tabId);
+                }
+                return true;
+            }
+            _log.LogWarning("Suspend for tab {Id} reported failure", tabId);
+            return false;
         }
         catch (Exception ex)
         {
@@ -151,11 +279,25 @@ public sealed class BrowserRuntime : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Destroy the renderer for the tab (Ghost). Removes the view from the
-    /// registry and releases native resources. Returns true if a renderer was
-    /// actually removed.
-    /// </summary>
+    public async Task<bool> ResumeAsync(Guid tabId, CancellationToken ct = default)
+    {
+        IBrowserView? view;
+        lock (_viewsGate) _views.TryGetValue(tabId, out view);
+        if (view is null) return false;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var ok = await view.ResumeAsync(ct).ConfigureAwait(false);
+            LastResumeLatency = sw.Elapsed;
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Resume failed for tab {Id}", tabId);
+            return false;
+        }
+    }
+
     public async Task<bool> GhostAsync(Guid tabId, CancellationToken ct = default)
     {
         IBrowserView? view;
@@ -163,6 +305,16 @@ public sealed class BrowserRuntime : IAsyncDisposable
         {
             if (!_views.TryGetValue(tabId, out view)) return false;
             _views.Remove(tabId);
+        }
+        if (view is null) return false;
+        try
+        {
+            var ctx = await view.ExtractPageContextAsync(ct).ConfigureAwait(false);
+            _ui.Post(() => _tabService.UpdatePageContext(tabId, ctx));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Ghost pre-save failed for tab {Id}", tabId);
         }
         try
         {
@@ -172,34 +324,144 @@ public sealed class BrowserRuntime : IAsyncDisposable
         {
             _log.LogWarning(ex, "Ghost dispose raised for tab {Id}", tabId);
         }
-        try { await view.DisposeAsync().ConfigureAwait(false); } catch { }
+        try { await view.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception ex) { _log.LogDebug(ex, "Ghost final dispose raised for tab {Id}", tabId); }
         _log.LogInformation("Renderer ghosted for tab {Id}", tabId);
         return true;
     }
 
     /// <summary>
-    /// Bring a Ghost or Warm renderer back to Live, recreating it if needed.
-    /// For Ghost: creates a fresh view and re-navigates to the tab's stored URL.
-    /// For Warm: asks the engine to resume.
-    /// Returns the live view, or null if WakeAsync failed.
+    /// Restore a Ghosted tab to a fully Live, navigated state. Creates a
+    /// fresh renderer, navigates to the persisted URL, awaits navigation
+    /// completion, then restores scroll. Returns true when the page is
+    /// usable (or when there is nothing to navigate, e.g. encomm://).
     /// </summary>
-    public async Task<IBrowserView?> WakeAsync(TabRecord tab, CancellationToken ct = default)
+    public async Task<bool> RestoreGhostTabAsync(TabRecord tab, CancellationToken ct = default)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(BrowserRuntime));
         if (tab is null) throw new ArgumentNullException(nameof(tab));
-        IBrowserView? existing;
-        lock (_viewsGate) _views.TryGetValue(tab.Id, out existing);
-        if (existing is not null)
+        var sw = Stopwatch.StartNew();
+        try
         {
-            await existing.WakeAsync(ct).ConfigureAwait(false);
-            return existing;
+            var view = await GetOrCreateAsync(tab, ct).ConfigureAwait(false);
+            if (view is null) return false;
+
+            if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase))
+            {
+                _tabService.SetRendererState(tab, TabRendererStateKind.Live);
+                LastRestoreLatency = sw.Elapsed;
+                return true;
+            }
+            var result = await view.NavigateAsync(tab.Url, ct).ConfigureAwait(false);
+            if (!result.Accepted)
+            {
+                _log.LogWarning("Restore navigate failed for {Id}: {Reason}", tab.Id, result.Reason);
+                return false;
+            }
+            // Await the navigation-completion event so scroll restoration
+            // lands on the loaded document instead of about:blank.
+            var navigated = await AwaitNavigationAsync(view, ct).ConfigureAwait(false);
+            if (!navigated)
+            {
+                _log.LogWarning("Restore navigation did not complete for {Id}", tab.Id);
+            }
+            try
+            {
+                await view.SetScrollAsync(tab.ScrollX, tab.ScrollY, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Restore scroll failed for {Id}", tab.Id);
+            }
+            _tabService.SetRendererState(tab, TabRendererStateKind.Live);
+            LastRestoreLatency = sw.Elapsed;
+            _log.LogInformation("Tab {Id} restored in {Ms}ms", tab.Id, LastRestoreLatency.TotalMilliseconds);
+            return true;
         }
-        // No view at all: create a new one. GetOrCreateAsync handles it.
-        return await GetOrCreateAsync(tab, ct).ConfigureAwait(false);
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Restore failed for tab {Id}", tab.Id);
+            return false;
+        }
     }
 
-    /// <summary>Ghost all currently-tracked renderers. Used during workspace switch / shutdown.</summary>
-    public async Task GhostAllAsync(CancellationToken ct = default)
+    private static Task<bool> AwaitNavigationAsync(IBrowserView view, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<NavigationCompletedEventArgs>? handler = null;
+        handler = (_, e) =>
+        {
+            if (handler is not null) view.NavigationCompleted -= handler;
+            tcs.TrySetResult(e.Success);
+        };
+        view.NavigationCompleted += handler;
+        var reg = ct.Register(() =>
+        {
+            if (handler is not null) view.NavigationCompleted -= handler;
+            tcs.TrySetResult(false);
+        });
+        // Navigation watchdog: a page that never completes must not hang
+        // restoration forever.
+        var watchdog = Task.Delay(TimeSpan.FromSeconds(20), ct).ContinueWith(_ =>
+        {
+            if (handler is not null) view.NavigationCompleted -= handler;
+            tcs.TrySetResult(false);
+        }, TaskScheduler.Default);
+        _ = watchdog.ContinueWith(_ => reg.Dispose(), TaskScheduler.Default);
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Ensure the active tab's renderer shows its stored URL. Called after
+    /// selecting a tab, restoring a session, or switching workspaces. For
+    /// encomm:// URLs the native new-tab surface is shown instead of
+    /// navigating WebView2 (which cannot resolve that scheme).
+    /// </summary>
+    public async Task<bool> EnsureTabContentAsync(TabRecord tab, CancellationToken ct = default)
+    {
+        if (tab is null) throw new ArgumentNullException(nameof(tab));
+        if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase))
+        {
+            // Native new-tab surface; nothing to navigate.
+            return true;
+        }
+        var view = await GetOrCreateAsync(tab, ct).ConfigureAwait(false);
+        if (view is null) return false;
+        var current = view.CurrentUrl ?? "";
+        if (string.IsNullOrEmpty(current) || current.Contains("about:blank", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await view.NavigateAsync(tab.Url, ct).ConfigureAwait(false);
+            if (!result.Accepted)
+            {
+                _log.LogWarning("EnsureTabContent navigate failed for {Id}: {Reason}", tab.Id, result.Reason);
+                return false;
+            }
+            await AwaitNavigationAsync(view, ct).ConfigureAwait(false);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Returns true when total process-tree memory is over the configured
+    /// threshold (Adaptive preset). The lifecycle uses this to Ghost
+    /// unprotected tabs earlier.
+    /// </summary>
+    public bool IsUnderMemoryPressure(Func<IReadOnlyList<WebViewProcessInfo>>? processSource = null)
+    {
+        if (MemoryPressureThresholdBytes <= 0) return false;
+        try
+        {
+            var infos = processSource is not null ? processSource() : GetWebViewProcessInfos();
+            long total = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
+            foreach (var p in infos) total += p.WorkingSet64;
+            return total >= MemoryPressureThresholdBytes;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<int> GhostAllAsync(CancellationToken ct = default)
     {
         List<IBrowserView> toDispose;
         lock (_viewsGate)
@@ -209,10 +471,28 @@ public sealed class BrowserRuntime : IAsyncDisposable
         }
         foreach (var v in toDispose)
         {
-            try { await v.GhostAsync(ct).ConfigureAwait(false); } catch { }
-            try { await v.DisposeAsync().ConfigureAwait(false); } catch { }
+            try { await v.GhostAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { _log.LogDebug(ex, "GhostAll: ghost raised"); }
+            try { await v.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) { _log.LogDebug(ex, "GhostAll: dispose raised"); }
         }
-        _log.LogInformation("All {Count} renderers ghosted.", toDispose.Count);
+        if (toDispose.Count > 0)
+            _log.LogInformation("All {Count} renderers ghosted.", toDispose.Count);
+        return toDispose.Count;
+    }
+
+    public async Task<bool> DropViewAsync(Guid tabId, CancellationToken ct = default)
+    {
+        IBrowserView? view;
+        lock (_viewsGate)
+        {
+            if (!_views.TryGetValue(tabId, out view)) return false;
+            _views.Remove(tabId);
+        }
+        if (view is null) return false;
+        try { await view.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception ex) { _log.LogDebug(ex, "DropView dispose raised for {Id}", tabId); }
+        return true;
     }
 
     public async ValueTask DisposeAsync()

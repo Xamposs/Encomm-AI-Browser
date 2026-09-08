@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly AIService _ai;
     private readonly SettingsService _settingsService;
     private readonly ILogger<MainViewModel> _log;
+    private readonly Action<Action> _onUi;
 
     [ObservableProperty] private WorkspaceRecord? _activeWorkspace;
     [ObservableProperty] private TabRecord? _activeTab;
@@ -29,9 +31,9 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _aiCommandResult = "";
     [ObservableProperty] private string _selectedWorkspaceName = "Personal";
 
-    public System.Collections.ObjectModel.ObservableCollection<WorkspaceRecord> Workspaces => _workspaces.Workspaces;
-    public System.Collections.ObjectModel.ObservableCollection<TabRecord> Tabs => _tabs.Tabs;
-    public System.Collections.ObjectModel.ObservableCollection<AiCommandDescriptor> AiCommands { get; } = new();
+    public ObservableCollection<WorkspaceRecord> Workspaces => _workspaces.Workspaces;
+    public ObservableCollection<TabRecord> Tabs => _tabs.Tabs;
+    public ObservableCollection<AiCommandDescriptor> AiCommands { get; } = new();
 
     public MainViewModel(
         WorkspaceService workspaces,
@@ -47,6 +49,11 @@ public sealed partial class MainViewModel : ObservableObject
         _ai = ai;
         _settingsService = settingsService;
         _log = log;
+        // Marshal all UI mutations through the WinUI dispatcher so the
+        // BackgroundRuntime event callbacks (which fire on renderer threads)
+        // can land safely on the UI thread.
+        _onUi = a => runtime.Ui.Post(a);
+
         ActiveWorkspace = workspaces.ActiveWorkspace;
         SelectedWorkspaceName = ActiveWorkspace?.Name ?? "Personal";
         ActiveTab = tabs.ActiveTab;
@@ -58,23 +65,13 @@ public sealed partial class MainViewModel : ObservableObject
         {
             ActiveWorkspace = workspaces.ActiveWorkspace;
             SelectedWorkspaceName = ActiveWorkspace?.Name ?? "Personal";
-            // Ghost every renderer in the previous workspace.
             _ = _runtime.GhostAllAsync();
             _tabs.LoadForWorkspace(ActiveWorkspace!.Id);
             ActiveTab = _tabs.ActiveTab;
             AddressBarText = ActiveTab?.Url ?? "";
         };
 
-        _tabs.TabOpened += (_, t) => { ActiveTab = _tabs.ActiveTab; AddressBarText = ActiveTab?.Url ?? ""; };
-        _tabs.TabClosed += (_, t) =>
-        {
-            // Renderer is already dropped before TabService.Close was called
-            // (by the UI close-button handler). As a safety net, drop it here
-            // too in case some other path triggered TabClosed.
-            _ = _runtime.GhostAsync(t.Id);
-            ActiveTab = _tabs.ActiveTab;
-            AddressBarText = ActiveTab?.Url ?? "";
-        };
+        _tabs.TabOpened += (_, _) => { ActiveTab = _tabs.ActiveTab; AddressBarText = ActiveTab?.Url ?? ""; };
         _tabs.ActiveTabChanged += (_, t) =>
         {
             ActiveTab = t;
@@ -90,12 +87,14 @@ public sealed partial class MainViewModel : ObservableObject
         AiCommands.Add(new AiCommandDescriptor("Extract key information", "extract-info"));
     }
 
+    // -- Commands ----------------------------------------------------
+
     [RelayCommand]
     public async Task NavigateAsync()
     {
         if (string.IsNullOrWhiteSpace(AddressBarText)) return;
         if (ActiveTab is null) return;
-        var resolved = Encomm.Browser.Engine.Abstractions.OmniboxResolver.Resolve(
+        var resolved = OmniboxResolver.Resolve(
             AddressBarText, _settingsService.Current.SearchProviderUrl);
         if (string.IsNullOrEmpty(resolved)) return;
         ActiveTab = ActiveTab with { Url = resolved!, LastInteractionUtc = DateTimeOffset.UtcNow };
@@ -103,7 +102,16 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             var view = await _runtime.GetOrCreateAsync(ActiveTab);
-            await view.NavigateAsync(resolved!);
+            if (view is null)
+            {
+                _log.LogWarning("Navigate: renderer not ready for tab {Id}", ActiveTab.Id);
+                return;
+            }
+            var result = await view.NavigateAsync(resolved!);
+            if (!result.Accepted)
+            {
+                _log.LogWarning("Navigate rejected: {Reason}", result.Reason);
+            }
         }
         catch (Exception ex)
         {
@@ -112,25 +120,55 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public async Task NewTabAsync()
-    {
-        await _tabs.OpenNewAsync(_settingsService.Current.NewTabUrl, true);
-    }
+    public Task NewTabAsync() => _tabs.OpenNewAsync(_settingsService.Current.NewTabUrl, true);
 
     [RelayCommand]
-    public async Task ReopenClosedAsync()
+    public Task ReopenClosedAsync() => _tabs.ReopenRecentlyClosedAsync();
+
+    /// <summary>
+    /// Canonical close operation for ANY tab (active or background).
+    /// Drops the renderer, records "recently closed", deletes the logical
+    /// tab, and materializes the next active tab's renderer. This is the
+    /// ONLY close path; UI must not mutate Tabs directly.
+    /// </summary>
+    [RelayCommand]
+    public async Task CloseTabAsync(TabRecord tab)
     {
-        await _tabs.ReopenRecentlyClosedAsync();
+        if (tab is null) return;
+        try
+        {
+            var view = await _runtime.GetOrCreateAsync(tab);
+            if (view is not null)
+            {
+                try
+                {
+                    var ctx = await view.ExtractPageContextAsync();
+                    _tabs.UpdatePageContext(tab.Id, ctx);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogDebug(ex, "Close pre-save failed for tab {Id}", tab.Id);
+                }
+                await _runtime.GhostAsync(tab.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Close renderer teardown failed for tab {Id}", tab.Id);
+        }
+        _tabs.Close(tab);
+        var nextActive = _tabs.ActiveTab;
+        if (nextActive is not null)
+        {
+            try { await _runtime.EnsureTabContentAsync(nextActive); } catch { }
+        }
     }
 
     [RelayCommand]
     public async Task CloseActiveTabAsync()
     {
         if (ActiveTab is null) return;
-        var tab = ActiveTab;
-        // Drop the renderer FIRST (the real ghost), then remove the logical tab.
-        await _runtime.GhostAsync(tab.Id);
-        _tabs.Close(tab);
+        await CloseTabAsync(ActiveTab);
     }
 
     [RelayCommand]
@@ -152,17 +190,8 @@ public sealed partial class MainViewModel : ObservableObject
     public async Task ReloadAsync()
     {
         if (ActiveTab is null) return;
-        if (!_runtime.HasView(ActiveTab.Id))
-        {
-            // Renderer doesn't exist (Ghost). Bring it back, then reload.
-            var view = await _runtime.WakeAsync(ActiveTab);
-            if (view is not null) await view.ReloadAsync();
-        }
-        else
-        {
-            var view = await _runtime.GetOrCreateAsync(ActiveTab);
-            await view.ReloadAsync();
-        }
+        var view = await _runtime.GetOrCreateAsync(ActiveTab);
+        if (view is not null) await view.ReloadAsync();
     }
 
     [RelayCommand]
@@ -171,7 +200,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (ActiveTab is null) return;
         if (!_runtime.HasView(ActiveTab.Id)) return;
         var view = await _runtime.GetOrCreateAsync(ActiveTab);
-        await view.StopAsync();
+        if (view is not null) await view.StopAsync();
     }
 
     [RelayCommand]
@@ -180,7 +209,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (ActiveTab is null) return;
         if (!_runtime.HasView(ActiveTab.Id)) return;
         var view = await _runtime.GetOrCreateAsync(ActiveTab);
-        await view.GoBackAsync();
+        if (view is not null) await view.GoBackAsync();
     }
 
     [RelayCommand]
@@ -189,22 +218,40 @@ public sealed partial class MainViewModel : ObservableObject
         if (ActiveTab is null) return;
         if (!_runtime.HasView(ActiveTab.Id)) return;
         var view = await _runtime.GetOrCreateAsync(ActiveTab);
-        await view.GoForwardAsync();
+        if (view is not null) await view.GoForwardAsync();
     }
 
+    /// <summary>
+    /// Canonical tab-selection. Updates the logical active tab, then
+    /// ensures a live renderer with the right lifecycle transition:
+    /// Live → attach; Warm → Resume; Ghost → full restore + navigate.
+    /// </summary>
     [RelayCommand]
     public async Task SelectTabAsync(TabRecord tab)
     {
         if (tab is null) return;
         _tabs.SetActive(tab);
-        // Materialize a renderer for the newly-active tab (lazy).
+        ActiveTab = _tabs.ActiveTab;
         try
         {
-            await _runtime.GetOrCreateAsync(tab);
+            if (tab.RendererState == TabRendererStateKind.Ghost)
+            {
+                await _runtime.RestoreGhostTabAsync(tab);
+            }
+            else if (tab.RendererState == TabRendererStateKind.Warm)
+            {
+                var resumed = await _runtime.ResumeAsync(tab.Id);
+                if (resumed) _tabs.SetRendererState(tab, TabRendererStateKind.Live);
+                await _runtime.EnsureTabContentAsync(tab);
+            }
+            else
+            {
+                await _runtime.EnsureTabContentAsync(tab);
+            }
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Materialize renderer for tab {Id} failed", tab.Id);
+            _log.LogWarning(ex, "SelectTab renderer ensure failed for {Id}", tab.Id);
         }
     }
 

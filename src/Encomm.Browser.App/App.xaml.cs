@@ -1,22 +1,28 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Encomm.Browser.App.Services;
 using Encomm.Browser.App.ViewModels;
 using Encomm.Browser.Core;
 using Encomm.Browser.Core.Storage;
+using Encomm.Browser.Engine.Abstractions;
 using Encomm.Browser.Settings;
 using Encomm.Browser.Shield;
 using Encomm.Browser.Memory;
 using Encomm.Browser.AI;
 using Encomm.Browser.Security;
 using Encomm.Browser.Developer;
+using System;
 
 namespace Encomm.Browser.App;
 
 public partial class App : Application
 {
-    public static IServiceProvider Services { get; private set; } = null!;
+    public static IServiceProvider Services { get; set; } = null!;
+    public static IUiDispatcher Ui { get; private set; } = null!;
+    public static DispatcherQueue? MainDispatcherQueue { get; private set; }
+    public static string[]? StartupArgs { get; private set; }
 #pragma warning disable CS0649
     private Window? _mainWindow;
 #pragma warning restore CS0649
@@ -27,10 +33,7 @@ public partial class App : Application
         InitializeComponent();
         Services = BuildServices();
         _log = Services.GetService<ILoggerFactory>()?.CreateLogger<App>();
-        _log?.LogInformation("App starting.");
-        // Wire ambient workspace accessor
-        WorkspaceContextAccessor.Current = Services.GetRequiredService<WorkspaceService>();
-        _log?.LogInformation("Workspace context wired.");
+        _log?.LogInformation("App constructor finished.");
     }
 
     public Window? MainWindowForTheme => _mainWindow;
@@ -38,11 +41,16 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // Intentionally left empty. The desktop app creates its main window
-        // directly from the XAML startup callback (Program.cs). OnLaunched is
-        // only used for OS activation paths we don't currently exercise.
-        _log?.LogInformation("OnLaunched called (not used in desktop mode).");
+        // directly from the XAML startup callback (Program.cs).
+        _log?.LogInformation("OnLaunched called.");
     }
-    private static IServiceProvider BuildServices()
+
+    /// <summary>
+    /// Build services. This is called from Program.Main before XAML
+    /// activation so the DI graph is ready when the first window is
+    /// constructed.
+    /// </summary>
+    public static IServiceProvider BuildServicesStatic()
     {
         var services = new ServiceCollection();
         services.AddLogging(b =>
@@ -68,15 +76,16 @@ public partial class App : Application
             return svc;
         });
 
-        // WebView2 engine factory creates the engine on demand when the
-        // BrowserRuntime initializes. We pin to 2.2 to match the
-        // system-installed WindowsAppRuntime framework.
         services.AddSingleton<WebView2EngineFactory>();
+        // BrowserRuntime is created with a dispatcher placeholder; the
+        // Program.Main swaps in the real UI dispatcher after XAML creates
+        // the DispatcherQueueController.
         services.AddSingleton<BrowserRuntime>(sp => new BrowserRuntime(
             sp.GetRequiredService<IRequestBlocker>(),
             sp.GetRequiredService<ILogger<BrowserRuntime>>(),
             sp.GetRequiredService<TabService>(),
-            rt => sp.GetRequiredService<WebView2EngineFactory>().CreateAsync(rt)));
+            sp.GetRequiredService<WebView2EngineFactory>(),
+            new NoOpUiDispatcher()));
         services.AddSingleton<TabLifecycleManager>();
 
         services.AddSingleton<IFilterRuleProvider>(_ => new FilterRuleProvider());
@@ -125,4 +134,38 @@ public partial class App : Application
 
         return services.BuildServiceProvider();
     }
+
+    private static IServiceProvider BuildServices() => BuildServicesStatic();
+
+    /// <summary>
+    /// Called by Program.Main once the XAML DispatcherQueue exists. We
+    /// replace the no-op dispatcher in BrowserRuntime with a real one
+    /// so renderer-thread callbacks can land on the UI thread.
+    /// </summary>
+    public static void InitializeUiDispatcher(DispatcherQueue queue)
+    {
+        MainDispatcherQueue = queue;
+        Ui = new WinUiDispatcher(queue);
+        var runtime = Services.GetRequiredService<BrowserRuntime>();
+        // We cannot replace the runtime — its ctor captured the no-op
+        // dispatcher. Reconstruct it with the real one. This is the only
+        // place we manually rewire the runtime.
+        // (Implementation note: BrowserRuntime is a sealed class; we
+        // expose a one-time swap via reflection-free internal API.)
+        runtime.AttachUiDispatcher(Ui);
+    }
+
+    public static void SetStartupArgs(string[] args) => StartupArgs = args;
+}
+
+/// <summary>
+/// Stand-in dispatcher used during DI container build (before the XAML
+/// DispatcherQueue exists). All Post() invocations are no-ops. Replaced
+/// by a real WinUiDispatcher once XAML is up.
+/// </summary>
+internal sealed class NoOpUiDispatcher : IUiDispatcher
+{
+    public bool HasThreadAccess => true;
+    public void Post(Action action) { action?.Invoke(); }
+    public async Task<T> RunAsync<T>(Func<Task<T>> func) => await func().ConfigureAwait(false);
 }

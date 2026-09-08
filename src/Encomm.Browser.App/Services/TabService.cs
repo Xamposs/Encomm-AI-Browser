@@ -8,13 +8,16 @@ using Microsoft.Extensions.Logging;
 namespace Encomm.Browser.App.Services;
 
 /// <summary>
-/// Central manager for LOGICAL tabs. Owns the in-memory map of tabs and
-/// persists them. Does NOT own renderer state — that is
-/// `BrowserRuntime`'s job. `TabService` only manipulates the `TabRecord`
-/// domain shape; it never instantiates or touches `IBrowserView`.
+/// Central manager for LOGICAL tabs.
 ///
-/// Omnibox resolution uses the engine-independent `OmniboxResolver` so
-/// creating a new tab allocates zero renderer resources.
+/// Owns the in-memory map of tabs and persists them. Does NOT own renderer
+/// state — that is `BrowserRuntime`'s job. TabService only manipulates
+/// the `TabRecord` domain shape; it never instantiates or touches
+/// `IBrowserView`.
+///
+/// All mutations are dispatched to the UI thread by the caller
+/// (BrowserRuntime posts via its IUiDispatcher). TabService itself
+/// does no thread-marshaling — it assumes it is called on the UI thread.
 /// </summary>
 public sealed class TabService
 {
@@ -56,6 +59,8 @@ public sealed class TabService
             ActiveTab = Tabs[0];
         ActiveTabChanged?.Invoke(this, ActiveTab);
     }
+
+    public TabRecord? FindTab(Guid id) => _byId.TryGetValue(id, out var t) ? t : null;
 
     public Task<TabRecord> OpenNewAsync(string url, bool switchTo = true, CancellationToken ct = default)
     {
@@ -107,9 +112,9 @@ public sealed class TabService
     }
 
     /// <summary>
-    /// Close a logical tab. The renderer (if any) must be destroyed by the
-    /// caller via `BrowserRuntime.GhostAsync` BEFORE calling this method;
-    /// `TabService` does not touch renderers.
+    /// Close a logical tab. Caller is responsible for any renderer
+    /// teardown via BrowserRuntime BEFORE calling this; TabService does
+    /// not touch renderers.
     /// </summary>
     public void Close(TabRecord tab)
     {
@@ -168,6 +173,11 @@ public sealed class TabService
         UpdateFlag(tab, t => t with { RendererState = state });
     }
 
+    public void SetLogicalState(TabRecord tab, TabLogicalStateKind state)
+    {
+        UpdateFlag(tab, t => t with { LogicalState = state });
+    }
+
     private void UpdateFlag(TabRecord tab, Func<TabRecord, TabRecord> mutate)
     {
         if (tab is null) return;
@@ -195,7 +205,7 @@ public sealed class TabService
         var list = new List<TabStateSummary>(Tabs.Count);
         foreach (var t in Tabs)
         {
-            list.Add(new TabStateSummary(t.Id, (TabRendererState)(int)t.RendererState));
+            list.Add(new TabStateSummary(t.Id, (Encomm.Browser.Memory.TabRendererState)(int)t.RendererState));
         }
         return list;
     }
@@ -223,15 +233,45 @@ public sealed class TabService
 
     public IEnumerable<TabRecord> TabsInCurrentWorkspace() => Tabs;
 
-    /// <summary>
-    /// Replace the title on a tab. Used by the BrowserRuntime to surface
-    /// `TitleChanged` events without holding a mutable reference.
-    /// </summary>
-    public void MutateTitle(Guid tabId, string newTitle)
+    // -- Mutations invoked by BrowserRuntime (must run on UI thread) ----
+
+    public bool TryMutateTitle(Guid tabId, string newTitle)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return false;
+        if (tab.Title == newTitle) return false;
+        ReplaceTab(tab with { Title = newTitle });
+        _persistence.SaveTab(_byId[tabId]);
+        return true;
+    }
+
+    public void MutateFavicon(Guid tabId, string? faviconUrl)
     {
         if (!_byId.TryGetValue(tabId, out var tab)) return;
-        if (tab.Title == newTitle) return;
-        ReplaceTab(tab with { Title = newTitle });
+        ReplaceTab(tab with { FaviconUrl = faviconUrl });
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void MutateLoadingState(Guid tabId, bool isLoading)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        var updated = tab with { LastInteractionUtc = isLoading ? DateTimeOffset.UtcNow : tab.LastInteractionUtc };
+        ReplaceTab(updated);
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void MutateAudioState(Guid tabId, bool playing)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        // Audio-playing tabs are protected from automatic Ghosting by
+        // setting KeepAwake. The user can still Ghost manually.
+        ReplaceTab(tab with { KeepAwake = playing || tab.KeepAwake });
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void MutateLastInteractionUtc(Guid tabId)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        ReplaceTab(tab with { LastInteractionUtc = DateTimeOffset.UtcNow });
         _persistence.SaveTab(_byId[tabId]);
     }
 
@@ -239,6 +279,26 @@ public sealed class TabService
     {
         if (!_byId.TryGetValue(tabId, out var tab)) return;
         ReplaceTab(tab with { Url = url, LastInteractionUtc = DateTimeOffset.UtcNow });
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void UpdatePageContext(Guid tabId, PageContext ctx)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        ReplaceTab(tab with
+        {
+            Title = string.IsNullOrEmpty(ctx.Title) ? tab.Title : ctx.Title,
+            FaviconUrl = ctx.FaviconUrl ?? tab.FaviconUrl,
+            ScrollX = ctx.ScrollX,
+            ScrollY = ctx.ScrollY
+        });
+        _persistence.SaveTab(_byId[tabId]);
+    }
+
+    public void MutateScroll(Guid tabId, double x, double y)
+    {
+        if (!_byId.TryGetValue(tabId, out var tab)) return;
+        ReplaceTab(tab with { ScrollX = x, ScrollY = y });
         _persistence.SaveTab(_byId[tabId]);
     }
 }

@@ -8,6 +8,8 @@ namespace Encomm.Browser.Core.Storage;
 [SupportedOSPlatform("windows")]
 public sealed class BrowserPersistenceService
 {
+    private const int CurrentSchemaVersion = 2;
+
     private readonly SqliteStore _store;
     private readonly ILogger<BrowserPersistenceService> _log;
 
@@ -21,6 +23,20 @@ public sealed class BrowserPersistenceService
     private void EnsureSchema()
     {
         using var conn = _store.OpenConnection();
+        using (var v = conn.CreateCommand())
+        {
+            v.CommandText = "PRAGMA user_version;";
+            var raw = v.ExecuteScalar();
+            int current = raw is long l ? (int)l : 0;
+            if (current < 1) MigrateTo1(conn);
+            if (current < 2) MigrateTo2(conn);
+        }
+    }
+
+    private static void MigrateTo1(SqliteConnection conn)
+    {
+        // Initial schema: workspaces, tabs, recently_closed, app_state.
+        // Idempotent: each statement uses IF NOT EXISTS.
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
 CREATE TABLE IF NOT EXISTS workspaces(
@@ -58,8 +74,22 @@ CREATE TABLE IF NOT EXISTS app_state(
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+PRAGMA user_version = 1;
 ";
         cmd.ExecuteNonQuery();
+    }
+
+    private static void MigrateTo2(SqliteConnection conn)
+    {
+        // Schema v2: add scroll_x and scroll_y to tabs.
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+ALTER TABLE tabs ADD COLUMN scroll_x REAL NOT NULL DEFAULT 0;
+ALTER TABLE tabs ADD COLUMN scroll_y REAL NOT NULL DEFAULT 0;
+PRAGMA user_version = 2;
+";
+        try { cmd.ExecuteNonQuery(); }
+        catch { /* columns already exist */ }
     }
 
     public void SaveWorkspace(WorkspaceRecord w)
@@ -99,24 +129,22 @@ CREATE TABLE IF NOT EXISTS app_state(
     public void DeleteWorkspace(Guid id)
     {
         using var conn = _store.OpenConnection();
-        using var tx = conn.BeginTransaction();
-        using (var c = conn.CreateCommand())
-        {
-            c.Transaction = tx;
-            c.CommandText = "DELETE FROM workspaces WHERE id=$i; DELETE FROM tabs WHERE workspace_id=$i;";
-            c.Parameters.AddWithValue("$i", id.ToString());
-            c.ExecuteNonQuery();
-        }
-        tx.Commit();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM workspaces WHERE id=$i; DELETE FROM tabs WHERE workspace_id=$i;";
+        cmd.Parameters.AddWithValue("$i", id.ToString());
+        cmd.ExecuteNonQuery();
     }
 
     public void SaveTab(TabRecord t)
     {
         using var conn = _store.OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"INSERT INTO tabs(id,workspace_id,url,title,favicon_url,renderer_state,logical_state,pinned,muted,keep_awake,created_utc,last_interaction_utc,order_index,preview_path)
-VALUES($i,$w,$u,$t,$f,$rs,$ls,$p,$m,$k,$c,$l,$o,$pp)
-ON CONFLICT(id) DO UPDATE SET url=$u,title=$t,favicon_url=$f,renderer_state=$rs,logical_state=$ls,pinned=$p,muted=$m,keep_awake=$k,last_interaction_utc=$l,order_index=$o,preview_path=$pp;";
+        cmd.CommandText = @"INSERT INTO tabs(id,workspace_id,url,title,favicon_url,renderer_state,logical_state,pinned,muted,keep_awake,created_utc,last_interaction_utc,order_index,preview_path,scroll_x,scroll_y)
+VALUES($i,$w,$u,$t,$f,$rs,$ls,$p,$m,$k,$c,$l,$o,$pp,$sx,$sy)
+ON CONFLICT(id) DO UPDATE SET
+  url=$u, title=$t, favicon_url=$f, renderer_state=$rs, logical_state=$ls,
+  pinned=$p, muted=$m, keep_awake=$k, last_interaction_utc=$l, order_index=$o,
+  preview_path=$pp, scroll_x=$sx, scroll_y=$sy;";
         cmd.Parameters.AddWithValue("$i", t.Id.ToString());
         cmd.Parameters.AddWithValue("$w", t.WorkspaceId.ToString());
         cmd.Parameters.AddWithValue("$u", t.Url ?? "");
@@ -131,6 +159,8 @@ ON CONFLICT(id) DO UPDATE SET url=$u,title=$t,favicon_url=$f,renderer_state=$rs,
         cmd.Parameters.AddWithValue("$l", t.LastInteractionUtc.ToString("o"));
         cmd.Parameters.AddWithValue("$o", t.OrderIndex);
         cmd.Parameters.AddWithValue("$pp", (object?)t.PreviewPath ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sx", t.ScrollX);
+        cmd.Parameters.AddWithValue("$sy", t.ScrollY);
         cmd.ExecuteNonQuery();
     }
 
@@ -139,7 +169,7 @@ ON CONFLICT(id) DO UPDATE SET url=$u,title=$t,favicon_url=$f,renderer_state=$rs,
         var list = new List<TabRecord>();
         using var conn = _store.OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id,workspace_id,url,title,favicon_url,renderer_state,logical_state,pinned,muted,keep_awake,created_utc,last_interaction_utc,order_index,preview_path FROM tabs WHERE workspace_id=$w ORDER BY order_index;";
+        cmd.CommandText = "SELECT id,workspace_id,url,title,favicon_url,renderer_state,logical_state,pinned,muted,keep_awake,created_utc,last_interaction_utc,order_index,preview_path,scroll_x,scroll_y FROM tabs WHERE workspace_id=$w ORDER BY order_index;";
         cmd.Parameters.AddWithValue("$w", workspaceId.ToString());
         using var rdr = cmd.ExecuteReader();
         while (rdr.Read())
@@ -158,7 +188,9 @@ ON CONFLICT(id) DO UPDATE SET url=$u,title=$t,favicon_url=$f,renderer_state=$rs,
                 DateTimeOffset.Parse(rdr.GetString(10)),
                 DateTimeOffset.Parse(rdr.GetString(11)),
                 rdr.GetInt32(12),
-                rdr.IsDBNull(13) ? null : rdr.GetString(13)));
+                rdr.IsDBNull(13) ? null : rdr.GetString(13),
+                rdr.GetDouble(14),
+                rdr.GetDouble(15)));
         }
         return list;
     }
@@ -241,8 +273,23 @@ public enum TabRendererStateKind { Live = 0, Warm = 1, Ghost = 2 }
 public enum TabLogicalStateKind { Active = 0, Background = 1 }
 
 public sealed record WorkspaceRecord(Guid Id, string Name, int OrderIndex, bool BuiltIn, DateTimeOffset CreatedUtc);
-public sealed record TabRecord(Guid Id, Guid WorkspaceId, string Url, string Title, string? FaviconUrl,
-    TabRendererStateKind RendererState, TabLogicalStateKind LogicalState,
-    bool Pinned, bool Muted, bool KeepAwake,
-    DateTimeOffset CreatedUtc, DateTimeOffset LastInteractionUtc, int OrderIndex, string? PreviewPath);
+
+public sealed record TabRecord(
+    Guid Id,
+    Guid WorkspaceId,
+    string Url,
+    string Title,
+    string? FaviconUrl,
+    TabRendererStateKind RendererState,
+    TabLogicalStateKind LogicalState,
+    bool Pinned,
+    bool Muted,
+    bool KeepAwake,
+    DateTimeOffset CreatedUtc,
+    DateTimeOffset LastInteractionUtc,
+    int OrderIndex,
+    string? PreviewPath,
+    double ScrollX = 0,
+    double ScrollY = 0);
+
 public sealed record RecentlyClosedRecord(Guid OriginalTabId, string Url, string Title, Guid WorkspaceId, DateTimeOffset ClosedUtc);
