@@ -8,6 +8,8 @@ public enum ViewLifecycleState
 {
     /// <summary>No view has been instantiated yet.</summary>
     None,
+    /// <summary>Renderer object exists but CoreWebView2 not yet initialized.</summary>
+    Initializing,
     /// <summary>Fully alive renderer.</summary>
     Live,
     /// <summary>Renderer suspended where the engine supports it.</summary>
@@ -40,7 +42,10 @@ public sealed record PageContext(
     string Title,
     string? Description,
     string? SelectedText,
-    string? BodyExcerpt);
+    string? BodyExcerpt,
+    string? FaviconUrl = null,
+    double ScrollX = 0,
+    double ScrollY = 0);
 
 /// <summary>Permissions the page may request.</summary>
 public enum PermissionKind
@@ -53,6 +58,14 @@ public enum PermissionKind
     ClipboardWrite,
     Other
 }
+
+/// <summary>
+/// Result of a navigation attempt. Returned by every navigation call so
+/// the caller can react to failures. A navigation is NEVER silently
+/// dropped; if the renderer is not ready or the URL cannot be parsed,
+/// the call reports the reason in <see cref="Reason"/>.
+/// </summary>
+public sealed record NavigationResult(bool Accepted, string? Reason = null);
 
 /// <summary>Lifecycle events surfaced from the engine.</summary>
 public interface IBrowserView : IAsyncDisposable
@@ -67,8 +80,15 @@ public interface IBrowserView : IAsyncDisposable
     bool CanGoBack { get; }
     bool CanGoForward { get; }
     bool IsLoading { get; }
+    bool IsDocumentPlayingAudio { get; }
 
-    /// <summary>Engine adapter fills this in. UI hosts an element from it.</summary>
+    /// <summary>
+    /// The WinUI element that should be parented in the browser host tree.
+    /// Throws InvalidOperationException if the renderer has not yet
+    /// completed initialization; callers should not ask for the host
+    /// element until <see cref="BrowserRuntime.GetOrCreateAsync"/>
+    /// completes successfully.
+    /// </summary>
     object HostElement { get; }
 
     event EventHandler<NavigationStartingEventArgs>? NavigationStarting;
@@ -83,29 +103,69 @@ public interface IBrowserView : IAsyncDisposable
     event EventHandler<ResourceBlockedEventArgs>? ResourceBlocked;
     event EventHandler<RenderErrorEventArgs>? RenderError;
 
-    Task NavigateAsync(string url, CancellationToken ct = default);
+    /// <summary>
+    /// Navigate the live renderer to the URL. Must be called on a renderer
+    /// in the <see cref="ViewLifecycleState.Live"/> or
+    /// <see cref="ViewLifecycleState.Warm"/> state.
+    /// </summary>
+    Task<NavigationResult> NavigateAsync(string url, CancellationToken ct = default);
+
     Task<string?> ResolveUrlAsync(string userInput, CancellationToken ct = default);
     Task ReloadAsync(CancellationToken ct = default);
     Task StopAsync(CancellationToken ct = default);
     Task GoBackAsync(CancellationToken ct = default);
     Task GoForwardAsync(CancellationToken ct = default);
 
-    /// <summary>Bring renderer to Live (recreate if Ghost).</summary>
-    Task WakeAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Return the current scroll offset, best-effort. Returns (0, 0) when
+    /// no renderer is ready or the page did not report a value.
+    /// </summary>
+    Task<(double X, double Y)> GetScrollAsync(CancellationToken ct = default);
 
-    /// <summary>Best-effort suspension. Falls back to Ghost where unsupported.</summary>
-    Task SuspendAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Set the scroll offset. Used during Ghost restore to bring the user
+    /// back to where they were.
+    /// </summary>
+    Task SetScrollAsync(double x, double y, CancellationToken ct = default);
 
-    /// <summary>Destroy the renderer entirely. Transitions to Ghost.</summary>
-    Task GhostAsync(CancellationToken ct = default);
-
+    /// <summary>
+    /// Capture the current page context (title, description, selection,
+    /// body excerpt, scroll). Used before Ghosting to preserve useful
+    /// metadata.
+    /// </summary>
     Task<PageContext> ExtractPageContextAsync(CancellationToken ct = default);
 
     Task<byte[]?> CapturePreviewAsync(int maxWidth, int maxHeight, CancellationToken ct = default);
-
     Task OpenDevToolsAsync(CancellationToken ct = default);
-
     Task SetZoomAsync(double zoom, CancellationToken ct = default);
+
+    /// <summary>
+    /// Resume a suspended renderer (Warm → Live). Restores control
+    /// visibility and calls the engine resume primitive. Returns true
+    /// when the renderer is Live afterwards.
+    /// </summary>
+    Task<bool> ResumeAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Best-effort detection of potentially unsaved form state
+    /// (changed inputs, textareas, contenteditable). Used to protect a
+    /// tab from *automatic* Ghosting. Never blocks manual Ghost.
+    /// </summary>
+    Task<bool> HasUnsavedFormStateAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Suspend the renderer (Live → Warm). Best-effort: returns true on
+    /// success. Caller is responsible for persisting scroll / metadata
+    /// before calling.
+    /// </summary>
+    Task<bool> SuspendAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Destroy the renderer entirely. Transitions to Ghost. Releases
+    /// the underlying WinUI element. Caller has already persisted any
+    /// required metadata.
+    /// </summary>
+    Task<bool> GhostAsync(CancellationToken ct = default);
 }
 
 public sealed class NavigationStartingEventArgs : EventArgs
@@ -153,7 +213,6 @@ public sealed class NewWindowRequestEventArgs : EventArgs
 {
     public required string Url { get; init; }
     public required bool IsUserInitiated { get; init; }
-    public required Action<IBrowserView> OpenInPlace;
     public required Action OpenInNewTab;
     public required Action Decline;
 }
@@ -183,6 +242,27 @@ public enum WebViewProcessKind
 public sealed record WebViewProcessInfo(int ProcessId, WebViewProcessKind Kind, long WorkingSet64);
 
 /// <summary>
+/// Abstraction over a UI-thread dispatcher. The engine abstraction
+/// stays UI-framework-agnostic, so this is just "post work to the
+/// UI thread" without referencing Microsoft.UI.Dispatching.
+/// </summary>
+public interface IUiDispatcher
+{
+    /// <summary>True when the current thread is the UI thread.</summary>
+    bool HasThreadAccess { get; }
+
+    /// <summary>Post synchronous work to the UI thread.</summary>
+    void Post(Action action);
+
+    /// <summary>
+    /// Run async work on the UI thread and await its result.
+    /// Implementations must marshal the delegate to the UI thread even
+    /// when the caller is on a background thread.
+    /// </summary>
+    Task<T> RunAsync<T>(Func<Task<T>> func);
+}
+
+/// <summary>
 /// Process-wide engine factory. Owns the shared environment / user data
 /// folder, and creates per-tab views.
 /// </summary>
@@ -194,7 +274,11 @@ public interface IBrowserEngine : IAsyncDisposable
     /// <summary>The installed runtime version, where applicable.</summary>
     string? RuntimeVersion { get; }
 
-    /// <summary>Create a view for the given tab id.</summary>
+    /// <summary>
+    /// Create a view for the given tab id. The returned view must be
+    /// ready to host and navigate; the engine is responsible for
+    /// initializing the underlying control.
+    /// </summary>
     Task<IBrowserView> CreateViewAsync(Guid tabId, CancellationToken ct = default);
 
     /// <summary>

@@ -7,10 +7,11 @@ using Encomm.Browser.Shield;
 namespace Encomm.Browser.App.Services;
 
 /// <summary>
-/// Builds the single shared WebView2 environment. The runtime DLLs are
-/// loaded by the WinAppSDK 2.x UndockedRegFreeWinRT mechanism; we just
-/// create the environment with a deterministic user-data folder and
-/// hand the result to the WebView2 engine.
+/// Builds the single shared WebView2 engine. The runtime DLLs are
+/// loaded by the WinAppSDK 1.7 UndockedRegFreeWinRT mechanism
+/// (force-loaded from the application directory in Program.Main);
+/// we just hand a fresh engine to the BrowserRuntime, which owns the
+/// single shared CoreWebView2Environment created by the adapter.
 /// </summary>
 public sealed class WebView2EngineFactory
 {
@@ -28,6 +29,6 @@ public sealed class WebView2EngineFactory
         _log.LogInformation("Initializing WebView2 engine.");
         // Defer environment creation to the WebView2 adapter which has the
         // correct net6.0-windows10.0.17763.0 projection available.
-        return await Task.FromResult(new WebView2Engine(_blocker)).ConfigureAwait(false);
+        return await Task.FromResult(new WebView2Engine(_blocker, runtime.Ui)).ConfigureAwait(false);
     }
 }
