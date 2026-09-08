@@ -31,7 +31,16 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
-        Services = BuildServices();
+        // Program.Main builds the container before XAML starts so the
+        // dispatcher can be attached. Never build it twice: a second
+        // container would orphan the dispatcher wiring and every service
+        // resolved from it would keep the no-op dispatcher (which causes
+        // RPC_E_WRONG_THREAD as soon as a background continuation touches
+        // a bound collection or WinUI object).
+        if (Services is null)
+        {
+            Services = BuildServicesStatic();
+        }
         _log = Services.GetService<ILoggerFactory>()?.CreateLogger<App>();
         _log?.LogInformation("App constructor finished.");
     }
@@ -67,11 +76,13 @@ public partial class App : Application
 
         services.AddSingleton<BrowserPersistenceService>();
         services.AddSingleton<WorkspaceService>();
+        services.AddSingleton<IUiDispatcher, NoOpUiDispatcher>();
         services.AddSingleton<TabService>(sp =>
         {
             var svc = new TabService(
                 sp.GetRequiredService<BrowserPersistenceService>(),
-                sp.GetRequiredService<ILogger<TabService>>());
+                sp.GetRequiredService<ILogger<TabService>>(),
+                sp.GetRequiredService<IUiDispatcher>());
             svc.ConfigureSearchProvider(sp.GetRequiredService<SettingsService>().Current.SearchProviderUrl);
             return svc;
         });
@@ -153,6 +164,7 @@ public partial class App : Application
         // (Implementation note: BrowserRuntime is a sealed class; we
         // expose a one-time swap via reflection-free internal API.)
         runtime.AttachUiDispatcher(Ui);
+        Services.GetRequiredService<TabService>().AttachUiDispatcher(Ui);
     }
 
     public static void SetStartupArgs(string[] args) => StartupArgs = args;

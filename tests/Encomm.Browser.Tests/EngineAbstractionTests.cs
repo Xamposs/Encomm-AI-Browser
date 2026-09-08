@@ -107,6 +107,7 @@ public class EngineAbstractionTests
         public event EventHandler<NewWindowRequestEventArgs>? NewWindowRequested;
         public event EventHandler<ResourceBlockedEventArgs>? ResourceBlocked;
         public event EventHandler<RenderErrorEventArgs>? RenderError;
+        public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
 #pragma warning restore CS0067
         public Task<NavigationResult> NavigateAsync(string url, CancellationToken ct = default) => Task.FromResult(new NavigationResult(true));
         public Task<string?> ResolveUrlAsync(string userInput, CancellationToken ct = default) => Task.FromResult<string?>(userInput);

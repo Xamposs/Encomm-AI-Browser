@@ -23,6 +23,7 @@ public sealed class TabService
 {
     private readonly BrowserPersistenceService _persistence;
     private readonly ILogger<TabService> _log;
+    private IUiDispatcher _ui;
     private readonly Dictionary<Guid, TabRecord> _byId = new();
     private readonly LinkedList<RecentlyClosedRecord> _recentlyClosed = new();
     private const int RecentlyClosedLimit = 25;
@@ -35,29 +36,57 @@ public sealed class TabService
     public event EventHandler<TabRecord>? TabClosed;
     public event EventHandler<TabRecord?>? ActiveTabChanged;
 
-    public TabService(BrowserPersistenceService persistence, ILogger<TabService> log)
+    public TabService(BrowserPersistenceService persistence, ILogger<TabService> log, IUiDispatcher ui)
     {
         _persistence = persistence;
         _log = log;
+        _ui = ui;
+    }
+
+    /// <summary>
+    /// Swap the dispatcher once the XAML DispatcherQueue exists.
+    /// Called by App.InitializeUiDispatcher.
+    /// </summary>
+    public void AttachUiDispatcher(IUiDispatcher dispatcher)
+    {
+        if (dispatcher is null) throw new ArgumentNullException(nameof(dispatcher));
+        _ui = dispatcher;
+    }
+
+    /// <summary>
+    /// Run a tab-state mutation on the UI thread. Calls originating on
+    /// the UI thread run inline (preserving synchronous semantics for
+    /// UI command handlers); background continuations are posted.
+    /// Every mutation of Tabs/ActiveTab/_byId must go through here —
+    /// the Tabs collection is data-bound to XAML and throws
+    /// RPC_E_WRONG_THREAD when touched off-thread.
+    /// </summary>
+    private void OnUi(Action mutation)
+    {
+        if (_ui.HasThreadAccess) mutation();
+        else _ui.Post(mutation);
     }
 
     public void ConfigureSearchProvider(string url) => _searchProviderUrl = url;
 
     public void LoadForWorkspace(Guid workspaceId)
     {
-        Tabs.Clear();
-        _byId.Clear();
-        foreach (var t in _persistence.LoadTabs(workspaceId))
+        OnUi(() =>
         {
-            Tabs.Add(t);
-            _byId[t.Id] = t;
-        }
-        var lastActive = _persistence.GetAppState($"active_tab:{workspaceId}");
-        if (Guid.TryParse(lastActive, out var id) && _byId.TryGetValue(id, out var tab))
-            ActiveTab = tab;
-        else if (Tabs.Count > 0)
-            ActiveTab = Tabs[0];
-        ActiveTabChanged?.Invoke(this, ActiveTab);
+            Tabs.Clear();
+            _byId.Clear();
+            foreach (var t in _persistence.LoadTabs(workspaceId))
+            {
+                Tabs.Add(t);
+                _byId[t.Id] = t;
+            }
+            var lastActive = _persistence.GetAppState($"active_tab:{workspaceId}");
+            if (Guid.TryParse(lastActive, out var id) && _byId.TryGetValue(id, out var tab))
+                ActiveTab = tab;
+            else if (Tabs.Count > 0)
+                ActiveTab = Tabs[0];
+            ActiveTabChanged?.Invoke(this, ActiveTab);
+        });
     }
 
     public TabRecord? FindTab(Guid id) => _byId.TryGetValue(id, out var t) ? t : null;
@@ -75,11 +104,14 @@ public sealed class TabService
             TabRendererStateKind.Ghost, TabLogicalStateKind.Background,
             false, false, false,
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Tabs.Count, null);
-        Tabs.Add(tab);
-        _byId[tab.Id] = tab;
-        _persistence.SaveTab(tab);
-        if (switchTo) SetActive(tab);
-        TabOpened?.Invoke(this, tab);
+        OnUi(() =>
+        {
+            Tabs.Add(tab);
+            _byId[tab.Id] = tab;
+            _persistence.SaveTab(tab);
+            if (switchTo) SetActive(tab);
+            TabOpened?.Invoke(this, tab);
+        });
         _log.LogInformation("Tab opened: {Id} url={Url}", tab.Id, tab.Url);
         return Task.FromResult(tab);
     }
@@ -93,22 +125,25 @@ public sealed class TabService
     public void SetActive(TabRecord tab)
     {
         if (tab is null) return;
-        if (ActiveTab is not null && ActiveTab.Id != tab.Id)
+        OnUi(() =>
         {
-            var prev = ActiveTab with { LogicalState = TabLogicalStateKind.Background };
-            ReplaceTab(prev);
-        }
-        var updated = tab with
-        {
-            LogicalState = TabLogicalStateKind.Active,
-            LastInteractionUtc = DateTimeOffset.UtcNow,
-            RendererState = TabRendererStateKind.Live
-        };
-        ReplaceTab(updated);
-        ActiveTab = updated;
-        _persistence.SaveTab(updated);
-        _persistence.SetAppState($"active_tab:{updated.WorkspaceId}", updated.Id.ToString());
-        ActiveTabChanged?.Invoke(this, updated);
+            if (ActiveTab is not null && ActiveTab.Id != tab.Id)
+            {
+                var prev = ActiveTab with { LogicalState = TabLogicalStateKind.Background };
+                ReplaceTab(prev);
+            }
+            var updated = tab with
+            {
+                LogicalState = TabLogicalStateKind.Active,
+                LastInteractionUtc = DateTimeOffset.UtcNow,
+                RendererState = TabRendererStateKind.Live
+            };
+            ReplaceTab(updated);
+            ActiveTab = updated;
+            _persistence.SaveTab(updated);
+            _persistence.SetAppState($"active_tab:{updated.WorkspaceId}", updated.Id.ToString());
+            ActiveTabChanged?.Invoke(this, updated);
+        });
     }
 
     /// <summary>
@@ -119,32 +154,38 @@ public sealed class TabService
     public void Close(TabRecord tab)
     {
         if (tab is null) return;
-        var rec = new RecentlyClosedRecord(tab.Id, tab.Url, tab.Title, tab.WorkspaceId, DateTimeOffset.UtcNow);
-        _persistence.SaveRecentlyClosed(rec);
-        _recentlyClosed.AddFirst(rec);
-        while (_recentlyClosed.Count > RecentlyClosedLimit)
+        OnUi(() =>
         {
-            var last = _recentlyClosed.Last!;
-            _persistence.DeleteRecentlyClosed(last.Value.OriginalTabId);
-            _recentlyClosed.RemoveLast();
-        }
-        Tabs.Remove(tab);
-        _byId.Remove(tab.Id);
-        _persistence.DeleteTab(tab.Id);
-        if (ActiveTab?.Id == tab.Id)
-        {
-            ActiveTab = Tabs.Count > 0 ? Tabs[^1] : null;
-            _persistence.SetAppState($"active_tab:{tab.WorkspaceId}", ActiveTab?.Id.ToString() ?? Guid.Empty.ToString());
-            ActiveTabChanged?.Invoke(this, ActiveTab);
-        }
-        TabClosed?.Invoke(this, tab);
+            var rec = new RecentlyClosedRecord(tab.Id, tab.Url, tab.Title, tab.WorkspaceId, DateTimeOffset.UtcNow);
+            _persistence.SaveRecentlyClosed(rec);
+            _recentlyClosed.AddFirst(rec);
+            while (_recentlyClosed.Count > RecentlyClosedLimit)
+            {
+                var last = _recentlyClosed.Last!;
+                _persistence.DeleteRecentlyClosed(last.Value.OriginalTabId);
+                _recentlyClosed.RemoveLast();
+            }
+            Tabs.Remove(tab);
+            _byId.Remove(tab.Id);
+            _persistence.DeleteTab(tab.Id);
+            if (ActiveTab?.Id == tab.Id)
+            {
+                ActiveTab = Tabs.Count > 0 ? Tabs[^1] : null;
+                _persistence.SetAppState($"active_tab:{tab.WorkspaceId}", ActiveTab?.Id.ToString() ?? Guid.Empty.ToString());
+                ActiveTabChanged?.Invoke(this, ActiveTab);
+            }
+            TabClosed?.Invoke(this, tab);
+        });
     }
 
     public void MoveToWorkspace(TabRecord tab, Guid newWorkspaceId)
     {
-        var updated = tab with { WorkspaceId = newWorkspaceId };
-        ReplaceTab(updated);
-        _persistence.SaveTab(updated);
+        OnUi(() =>
+        {
+            var updated = tab with { WorkspaceId = newWorkspaceId };
+            ReplaceTab(updated);
+            _persistence.SaveTab(updated);
+        });
     }
 
     public TabRecord Duplicate(TabRecord tab)
@@ -157,10 +198,13 @@ public sealed class TabService
             CreatedUtc = DateTimeOffset.UtcNow,
             LastInteractionUtc = DateTimeOffset.UtcNow
         };
-        Tabs.Add(dup);
-        _byId[dup.Id] = dup;
-        _persistence.SaveTab(dup);
-        TabOpened?.Invoke(this, dup);
+        OnUi(() =>
+        {
+            Tabs.Add(dup);
+            _byId[dup.Id] = dup;
+            _persistence.SaveTab(dup);
+            TabOpened?.Invoke(this, dup);
+        });
         return dup;
     }
 
@@ -181,9 +225,12 @@ public sealed class TabService
     private void UpdateFlag(TabRecord tab, Func<TabRecord, TabRecord> mutate)
     {
         if (tab is null) return;
-        var updated = mutate(tab);
-        ReplaceTab(updated);
-        _persistence.SaveTab(updated);
+        OnUi(() =>
+        {
+            var updated = mutate(tab);
+            ReplaceTab(updated);
+            _persistence.SaveTab(updated);
+        });
     }
 
     public async Task<TabRecord?> ReopenRecentlyClosedAsync(CancellationToken ct = default)
@@ -239,67 +286,93 @@ public sealed class TabService
     {
         if (!_byId.TryGetValue(tabId, out var tab)) return false;
         if (tab.Title == newTitle) return false;
-        ReplaceTab(tab with { Title = newTitle });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var current)) return;
+            if (current.Title == newTitle) return;
+            ReplaceTab(current with { Title = newTitle });
+            _persistence.SaveTab(_byId[tabId]);
+        });
         return true;
     }
 
     public void MutateFavicon(Guid tabId, string? faviconUrl)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        ReplaceTab(tab with { FaviconUrl = faviconUrl });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            ReplaceTab(tab with { FaviconUrl = faviconUrl });
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 
     public void MutateLoadingState(Guid tabId, bool isLoading)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        var updated = tab with { LastInteractionUtc = isLoading ? DateTimeOffset.UtcNow : tab.LastInteractionUtc };
-        ReplaceTab(updated);
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            var updated = tab with { LastInteractionUtc = isLoading ? DateTimeOffset.UtcNow : tab.LastInteractionUtc };
+            ReplaceTab(updated);
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 
     public void MutateAudioState(Guid tabId, bool playing)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        // Audio-playing tabs are protected from automatic Ghosting by
-        // setting KeepAwake. The user can still Ghost manually.
-        ReplaceTab(tab with { KeepAwake = playing || tab.KeepAwake });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            // Audio-playing tabs are protected from automatic Ghosting by
+            // setting KeepAwake. The user can still Ghost manually.
+            ReplaceTab(tab with { KeepAwake = playing || tab.KeepAwake });
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 
     public void MutateLastInteractionUtc(Guid tabId)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        ReplaceTab(tab with { LastInteractionUtc = DateTimeOffset.UtcNow });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            ReplaceTab(tab with { LastInteractionUtc = DateTimeOffset.UtcNow });
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 
     public void MutateNavigationCompleted(Guid tabId, string url)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        ReplaceTab(tab with { Url = url, LastInteractionUtc = DateTimeOffset.UtcNow });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            ReplaceTab(tab with { Url = url, LastInteractionUtc = DateTimeOffset.UtcNow });
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 
     public void UpdatePageContext(Guid tabId, PageContext ctx)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        ReplaceTab(tab with
+        OnUi(() =>
         {
-            Title = string.IsNullOrEmpty(ctx.Title) ? tab.Title : ctx.Title,
-            FaviconUrl = ctx.FaviconUrl ?? tab.FaviconUrl,
-            ScrollX = ctx.ScrollX,
-            ScrollY = ctx.ScrollY
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            ReplaceTab(tab with
+            {
+                Title = string.IsNullOrEmpty(ctx.Title) ? tab.Title : ctx.Title,
+                FaviconUrl = ctx.FaviconUrl ?? tab.FaviconUrl,
+                ScrollX = ctx.ScrollX,
+                ScrollY = ctx.ScrollY
+            });
+            _persistence.SaveTab(_byId[tabId]);
         });
-        _persistence.SaveTab(_byId[tabId]);
     }
 
     public void MutateScroll(Guid tabId, double x, double y)
     {
-        if (!_byId.TryGetValue(tabId, out var tab)) return;
-        ReplaceTab(tab with { ScrollX = x, ScrollY = y });
-        _persistence.SaveTab(_byId[tabId]);
+        OnUi(() =>
+        {
+            if (!_byId.TryGetValue(tabId, out var tab)) return;
+            ReplaceTab(tab with { ScrollX = x, ScrollY = y });
+            _persistence.SaveTab(_byId[tabId]);
+        });
     }
 }
 

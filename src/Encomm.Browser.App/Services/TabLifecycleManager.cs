@@ -60,6 +60,22 @@ public sealed class TabLifecycleManager
         }
     }
 
+    /// <summary>
+    /// Apply persisted user settings (timeouts + adaptive threshold).
+    /// Called once at startup from Program.Main.
+    /// </summary>
+    public void ApplySettings(Encomm.Browser.Settings.BrowserSettings settings, BrowserRuntime runtime)
+    {
+        Configure(settings.MemoryPreset, settings.MemorySaverEnabled);
+        if (settings.WarmTimeoutMinutes > 0)
+            WarmAfter = TimeSpan.FromMinutes(settings.WarmTimeoutMinutes);
+        if (settings.GhostTimeoutMinutes > 0)
+            GhostAfter = TimeSpan.FromMinutes(settings.GhostTimeoutMinutes);
+        runtime.MemoryPressureThresholdBytes = settings.MemoryPressureThresholdMB > 0
+            ? (long)settings.MemoryPressureThresholdMB * 1024 * 1024
+            : 0;
+    }
+
     public DateTimeOffset LastTickUtc => _lastTickUtc;
 
     /// <summary>

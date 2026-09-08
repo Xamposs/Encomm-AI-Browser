@@ -31,6 +31,7 @@
             <ComboBox x:Name="PresetBox" HorizontalAlignment="Stretch">
                 <x:String>Balanced</x:String>
                 <x:String>Aggressive</x:String>
+                <x:String>Adaptive</x:String>
                 <x:String>NeverSleep</x:String>
             </ComboBox>
 

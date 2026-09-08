@@ -256,6 +256,24 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    public async Task SelectNextTabAsync()
+    {
+        if (Tabs.Count == 0) return;
+        var idx = ActiveTab is null ? -1 : Tabs.IndexOf(Tabs.FirstOrDefault(t => t.Id == ActiveTab.Id)!);
+        var next = Tabs[(idx + 1 + Tabs.Count) % Tabs.Count];
+        await SelectTabAsync(next);
+    }
+
+    [RelayCommand]
+    public async Task SelectPreviousTabAsync()
+    {
+        if (Tabs.Count == 0) return;
+        var idx = ActiveTab is null ? 0 : Tabs.IndexOf(Tabs.FirstOrDefault(t => t.Id == ActiveTab.Id)!);
+        var prev = Tabs[(idx - 1 + Tabs.Count) % Tabs.Count];
+        await SelectTabAsync(prev);
+    }
+
+    [RelayCommand]
     public void SwitchWorkspace(WorkspaceRecord workspace)
     {
         if (workspace is null) return;

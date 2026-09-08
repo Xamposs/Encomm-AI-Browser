@@ -19,6 +19,7 @@ public sealed class WebView2Engine : IBrowserEngine
     private readonly IUiDispatcher _ui;
     private CoreWebView2Environment? _environment;
     private readonly object _envGate = new();
+    private Task<CoreWebView2Environment>? _envTask;
 
     public WebView2Engine(IRequestBlocker blocker, IUiDispatcher ui)
     {
@@ -76,13 +77,27 @@ public sealed class WebView2Engine : IBrowserEngine
     /// Create the CoreWebView2 environment, then build a fully-initialized
     /// <see cref="IBrowserView"/> ready to be hosted and navigated.
     /// </summary>
+    /// <summary>
+    /// Create a fully-initialized view. The shared CoreWebView2Environment
+    /// is created once and reused: one environment per process keeps all
+    /// tabs in a single WebView2 browser process tree.
+    /// </summary>
     public async Task<IBrowserView> CreateViewAsync(Guid tabId, CancellationToken ct = default)
     {
-        var env = await CreateEnvironmentAsync(ct).ConfigureAwait(false);
+        var env = await GetEnvironmentAsync().ConfigureAwait(false);
         SetEnvironment(env);
         var view = new WebView2BrowserView(tabId, env, _blocker, _ui);
         await view.InitializeAsync(ct).ConfigureAwait(false);
         return view;
+    }
+
+    private Task<CoreWebView2Environment> GetEnvironmentAsync()
+    {
+        lock (_envGate)
+        {
+            if (_envTask is null) _envTask = CreateEnvironmentAsync();
+            return _envTask;
+        }
     }
 
     private static async Task<CoreWebView2Environment> CreateEnvironmentAsync(CancellationToken ct = default)
@@ -91,25 +106,40 @@ public sealed class WebView2Engine : IBrowserEngine
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Encomm", "Encomm-AI-Browser", "UserData");
         System.IO.Directory.CreateDirectory(userData);
-        // The C# projection surface for CoreWebView2Environment.CreateAsync
-        // varies across the WebView2 package versions bundled with
-        // WinAppSDK releases. Resolve the overload at runtime so one
-        // binary works across the 1.0.29xx–1.0.37xx family: prefer the
-        // explicit 3-arg form, fall back to the 1-arg user-data form.
+        // The WinAppSDK-bundled .NET projection of CoreWebView2Environment
+        // exposes CreateAsync as a parameterless method returning
+        // Windows.Foundation.IAsyncOperation<CoreWebView2Environment>
+        // (all three ABI parameters have defaults). The user-data folder
+        // is supplied through the documented WEBVIEW2_USER_DATA_FOLDER
+        // environment override, which CreateAsync honors.
+        Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", userData);
         var t = typeof(CoreWebView2Environment);
-        var m3 = t.GetMethod("CreateAsync", new[] { typeof(string), typeof(string), typeof(CoreWebView2EnvironmentOptions) });
-        if (m3 is not null)
+        var m0 = t.GetMethod("CreateAsync", Type.EmptyTypes);
+        if (m0 is null)
+            throw new InvalidOperationException("CoreWebView2Environment.CreateAsync overload not found.");
+        var op = m0.Invoke(null, null)!;
+        // Await the IAsyncOperation without depending on the WinRT awaiter
+        // extensions: block on a TaskCompletionSource via the Completed handler.
+        var tcs = new TaskCompletionSource<CoreWebView2Environment>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asyncOp = (Windows.Foundation.IAsyncOperation<CoreWebView2Environment>)op;
+        asyncOp.Completed = (_, status) =>
         {
-            var task = (System.Threading.Tasks.Task<CoreWebView2Environment>)m3.Invoke(null, new object?[] { null, userData, null })!;
-            return await task.ConfigureAwait(false);
-        }
-        var m1 = t.GetMethod("CreateAsync", new[] { typeof(string) });
-        if (m1 is not null)
-        {
-            var task = (System.Threading.Tasks.Task<CoreWebView2Environment>)m1.Invoke(null, new object?[] { userData })!;
-            return await task.ConfigureAwait(false);
-        }
-        throw new InvalidOperationException("CoreWebView2Environment.CreateAsync overload not found.");
+            try
+            {
+                if (status == Windows.Foundation.AsyncStatus.Completed)
+                    tcs.TrySetResult(asyncOp.GetResults());
+                else if (status == Windows.Foundation.AsyncStatus.Canceled)
+                    tcs.TrySetCanceled(ct);
+                else
+                    tcs.TrySetException(new InvalidOperationException("CoreWebView2Environment creation failed: " + status));
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        };
+        using (ct.Register(() => tcs.TrySetCanceled(ct))) { }
+        return await tcs.Task.ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -175,6 +205,93 @@ public sealed class WebView2BrowserView : IBrowserView
     public event EventHandler<NewWindowRequestEventArgs>? NewWindowRequested;
     public event EventHandler<ResourceBlockedEventArgs>? ResourceBlocked;
     public event EventHandler<RenderErrorEventArgs>? RenderError;
+    public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
+
+    /// <summary>
+    /// Capture-phase shortcut bridge. Runs on every document (main frame)
+    /// so owned browser combos reach the App layer even when page content
+    /// has keyboard focus. The guard flag keeps re-navigation idempotent.
+    /// </summary>
+    private const string AcceleratorBridgeScript = """
+        (function(){
+          if (window.__encommAccel) return; window.__encommAccel = true;
+          function owned(e){
+            var k = e.key || '';
+            if (e.ctrlKey && !e.altKey && !e.metaKey){
+              var lk = k.toLowerCase();
+              if (lk==='t'||lk==='w'||lk==='r'||lk==='l'||k==='Tab') return true;
+            }
+            if (e.altKey && !e.ctrlKey && !e.metaKey && (k==='ArrowLeft'||k==='ArrowRight')) return true;
+            if (!e.ctrlKey && !e.altKey && !e.metaKey && k==='F12') return true;
+            return false;
+          }
+          window.addEventListener('keydown', function(e){
+            if (!owned(e)) return;
+            try {
+              e.preventDefault(); e.stopPropagation();
+              if (window.chrome && window.chrome.webview){
+                window.chrome.webview.postMessage(JSON.stringify({
+                  kind:'encomm-accelerator', key:e.key,
+                  ctrl:!!e.ctrlKey, shift:!!e.shiftKey, alt:!!e.altKey
+                }));
+              }
+            } catch(_){}
+          }, true);
+        })();
+        """;
+
+    private static void InstallAcceleratorBridge(CoreWebView2 cv)
+    {
+        try { _ = cv.AddScriptToExecuteOnDocumentCreatedAsync(AcceleratorBridgeScript); }
+        catch { /* bridge is best-effort; XAML accelerators still cover chrome focus */ }
+    }
+
+    private void OnWebMessageForAccelerator(CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        string? json = null;
+        try { json = args.TryGetWebMessageAsString(); } catch { return; }
+        if (string.IsNullOrEmpty(json) || !json.Contains("encomm-accelerator")) return;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("key", out var kp)) return;
+            var vk = MapAcceleratorKey(kp.GetString());
+            if (vk is null) return;
+            var ctrl = root.TryGetProperty("ctrl", out var c) && c.GetBoolean();
+            var shift = root.TryGetProperty("shift", out var s) && s.GetBoolean();
+            var alt = root.TryGetProperty("alt", out var a) && a.GetBoolean();
+            var forwarded = new AcceleratorKeyEventArgs
+            {
+                VirtualKey = vk.Value,
+                Ctrl = ctrl,
+                Shift = shift,
+                Alt = alt,
+                KeyDown = true,
+            };
+            AcceleratorKeyPressed?.Invoke(this, forwarded);
+        }
+        catch { /* malformed bridge message: ignore */ }
+    }
+
+    private static uint? MapAcceleratorKey(string? key)
+    {
+        if (string.IsNullOrEmpty(key)) return null;
+        if (key.Length == 1)
+        {
+            var upper = char.ToUpperInvariant(key[0]);
+            if (upper is >= 'A' and <= 'Z') return upper;
+            return null;
+        }
+        return key switch
+        {
+            "Tab" => 0x09,
+            "F12" => 0x7B,
+            "ArrowLeft" => 0x25,
+            "ArrowRight" => 0x27,
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// Initialize the WinUI WebView2 control, ensure CoreWebView2, wire
@@ -233,6 +350,16 @@ public sealed class WebView2BrowserView : IBrowserView
                 Decline = () => { /* args.Handled=true already cancels */ }
             });
         };
+
+        // Browser shortcuts must work while focus is inside page
+        // content: the WebView2 child HWND receives keyboard input
+        // directly, bypassing the XAML accelerator table (and
+        // CoreWebView2 itself exposes no key event — AcceleratorKeyPressed
+        // lives on CoreWebView2Controller, unreachable from WinUI). So a
+        // tiny capture-phase script forwards owned combos via postMessage,
+        // with preventDefault suppressing WebView2 defaults (e.g. Ctrl+R).
+        cv.WebMessageReceived += (s, args) => OnWebMessageForAccelerator(args);
+        InstallAcceleratorBridge(cv);
 
         cv.PermissionRequested += (s, args) =>
         {
@@ -496,112 +623,115 @@ public sealed class WebView2BrowserView : IBrowserView
     /// reference is dropped so the GC and underlying Chromium process can
     /// free the memory.
     /// </summary>
-    public Task<bool> GhostAsync(CancellationToken ct = default)
-    {
-        if (_disposed) return Task.FromResult(false);
-        try
+    public Task<bool> GhostAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            if (_control is not null)
+            if (_disposed) return Task.FromResult(false);
+            try
             {
-                try { _control.Close(); } catch { }
-                _control = null!;
+                if (_control is not null)
+                {
+                    try { _control.Close(); } catch { }
+                    _control = null!;
+                }
             }
-        }
-        catch { }
-        _shieldFilterInstalled = false;
-        _state = ViewLifecycleState.Ghost;
-        LoadingStateChanged?.Invoke(this, new LoadingStateEventArgs { IsLoading = false });
-        return Task.FromResult(true);
-    }
+            catch { }
+            _shieldFilterInstalled = false;
+            _state = ViewLifecycleState.Ghost;
+            LoadingStateChanged?.Invoke(this, new LoadingStateEventArgs { IsLoading = false });
+            return Task.FromResult(true);
+        });
 
-    public Task<NavigationResult> NavigateAsync(string url, CancellationToken ct = default)
-    {
-        if (_state == ViewLifecycleState.Ghost || _state == ViewLifecycleState.None)
+    public Task<NavigationResult> NavigateAsync(string url, CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            return Task.FromResult(new NavigationResult(false, "renderer is not initialized"));
-        }
-        if (_control?.CoreWebView2 is null)
-        {
-            return Task.FromResult(new NavigationResult(false, "CoreWebView2 not available"));
-        }
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return Task.FromResult(new NavigationResult(false, "empty URL"));
-        }
-        try
-        {
-            _control.CoreWebView2.Navigate(url);
-            return Task.FromResult(new NavigationResult(true));
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult(new NavigationResult(false, ex.GetType().Name + ": " + ex.Message));
-        }
-    }
+            if (_state == ViewLifecycleState.Ghost || _state == ViewLifecycleState.None)
+                return Task.FromResult(new NavigationResult(false, "renderer is not initialized"));
+            if (_control?.CoreWebView2 is null)
+                return Task.FromResult(new NavigationResult(false, "CoreWebView2 not available"));
+            if (string.IsNullOrWhiteSpace(url))
+                return Task.FromResult(new NavigationResult(false, "empty URL"));
+            try
+            {
+                _control.CoreWebView2.Navigate(url);
+                return Task.FromResult(new NavigationResult(true));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(new NavigationResult(false, ex.GetType().Name + ": " + ex.Message));
+            }
+        });
 
     public Task<string?> ResolveUrlAsync(string userInput, CancellationToken ct = default)
         => Task.FromResult<string?>(WebView2Omnibox.Resolve(userInput));
 
-    public Task ReloadAsync(CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is not null)
+    public Task ReloadAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            try { _control.CoreWebView2.Reload(); } catch { }
-        }
-        return Task.CompletedTask;
-    }
+            if (_control?.CoreWebView2 is not null)
+            {
+                try { _control.CoreWebView2.Reload(); } catch { }
+            }
+            return Task.FromResult(true);
+        });
 
-    public Task StopAsync(CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is not null)
+    public Task StopAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            try { _control.CoreWebView2.Stop(); } catch { }
-        }
-        return Task.CompletedTask;
-    }
+            if (_control?.CoreWebView2 is not null)
+            {
+                try { _control.CoreWebView2.Stop(); } catch { }
+            }
+            return Task.FromResult(true);
+        });
 
-    public Task GoBackAsync(CancellationToken ct = default)
-    {
-        if (_control?.CanGoBack == true)
+    public Task GoBackAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            try { _control.GoBack(); } catch { }
-        }
-        return Task.CompletedTask;
-    }
+            if (_control?.CanGoBack == true)
+            {
+                try { _control.GoBack(); } catch { }
+            }
+            return Task.FromResult(true);
+        });
 
-    public Task GoForwardAsync(CancellationToken ct = default)
-    {
-        if (_control?.CanGoForward == true)
+    public Task GoForwardAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            try { _control.GoForward(); } catch { }
-        }
-        return Task.CompletedTask;
-    }
+            if (_control?.CanGoForward == true)
+            {
+                try { _control.GoForward(); } catch { }
+            }
+            return Task.FromResult(true);
+        });
 
-    public async Task<(double X, double Y)> GetScrollAsync(CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is null) return (0, 0);
-        try
+    public Task<(double X, double Y)> GetScrollAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(async () =>
         {
-            const string script = "(() => { try { return { x: window.scrollX || 0, y: window.scrollY || 0 }; } catch(e) { return null; } })();";
-            var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
-            return ParseScroll(result);
-        }
-        catch { return (0, 0); }
-    }
+            if (_control?.CoreWebView2 is null) return (0, 0);
+            try
+            {
+                const string script = "(() => { try { return { x: window.scrollX || 0, y: window.scrollY || 0 }; } catch(e) { return null; } })();";
+                var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
+                return ParseScroll(result);
+            }
+            catch { return (0, 0); }
+        });
 
-    public async Task SetScrollAsync(double x, double y, CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is null) return;
-        try
+    public Task SetScrollAsync(double x, double y, CancellationToken ct = default) =>
+        _ui.RunAsync(async () =>
         {
-            var sx = x.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var sy = y.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var script = $"(() => {{ try {{ window.scrollTo({sx}, {sy}); return true; }} catch(e) {{ return false; }} }})();";
-            await _control.CoreWebView2.ExecuteScriptAsync(script);
-        }
-        catch { }
-    }
+            if (_control?.CoreWebView2 is null) return true;
+            try
+            {
+                var sx = x.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var sy = y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var script = $"(() => {{ try {{ window.scrollTo({sx}, {sy}); return true; }} catch(e) {{ return false; }} }})();";
+                await _control.CoreWebView2.ExecuteScriptAsync(script);
+            }
+            catch { }
+            return true;
+        });
 
     private static (double X, double Y) ParseScroll(string? json)
     {
@@ -620,52 +750,55 @@ public sealed class WebView2BrowserView : IBrowserView
         catch { return (0, 0); }
     }
 
-    public async Task<PageContext> ExtractPageContextAsync(CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is null)
+    public Task<PageContext> ExtractPageContextAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(async () =>
         {
-            return new PageContext(_lastUrl, _lastTitle, _cachedDescription, _cachedSelection, _cachedBody, CurrentFaviconUrl, _scrollX, _scrollY);
-        }
-        var title = _control.CoreWebView2.DocumentTitle;
-        var url = _control.CoreWebView2.Source;
-        try
-        {
-            // We pass back a plain object (not JSON.stringify) so we don't
-            // need to unwrap the outer string in ParseContext. The script
-            // also captures scroll position so the saved metadata is complete.
-            const string script = "(() => { try { return { d: document.contentDescription || (document.querySelector('meta[name=description]')||{}).content || '', sel: (window.getSelection && window.getSelection().toString()) || '', ex: (document.body && (document.body.innerText||'').slice(0, 2000)) || '', x: window.scrollX || 0, y: window.scrollY || 0 }; } catch(e) { return null; } })();";
-            var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
-            return PageContextParser.Parse(result, url, title);
-        }
-        catch
-        {
-            return new PageContext(url, title, _cachedDescription, _cachedSelection, _cachedBody, CurrentFaviconUrl, _scrollX, _scrollY);
-        }
-    }
+            if (_control?.CoreWebView2 is null)
+            {
+                return new PageContext(_lastUrl, _lastTitle, _cachedDescription, _cachedSelection, _cachedBody, CurrentFaviconUrl, _scrollX, _scrollY);
+            }
+            var title = _control.CoreWebView2.DocumentTitle;
+            var url = _control.CoreWebView2.Source;
+            try
+            {
+                // We pass back a plain object (not JSON.stringify) so we don't
+                // need to unwrap the outer string in ParseContext. The script
+                // also captures scroll position so the saved metadata is complete.
+                const string script = "(() => { try { return { d: document.contentDescription || (document.querySelector('meta[name=description]')||{}).content || '', sel: (window.getSelection && window.getSelection().toString()) || '', ex: (document.body && (document.body.innerText||'').slice(0, 2000)) || '', x: window.scrollX || 0, y: window.scrollY || 0 }; } catch(e) { return null; } })();";
+                var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
+                return Security.PageContextParser.Parse(result, url, title);
+            }
+            catch
+            {
+                return new PageContext(url, title, _cachedDescription, _cachedSelection, _cachedBody, CurrentFaviconUrl, _scrollX, _scrollY);
+            }
+        });
 
-    public async Task<byte[]?> CapturePreviewAsync(int maxWidth, int maxHeight, CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is null) return null;
-        try
+    public Task<byte[]?> CapturePreviewAsync(int maxWidth, int maxHeight, CancellationToken ct = default) =>
+        _ui.RunAsync<byte[]?>(async () =>
         {
-            var stream = new InMemoryRandomAccessStream();
-            await _control.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
-            using var input = stream.AsStreamForRead();
-            using var ms = new System.IO.MemoryStream();
-            await input.CopyToAsync(ms, ct);
-            return ms.ToArray();
-        }
-        catch { return null; }
-    }
+            if (_control?.CoreWebView2 is null) return null;
+            try
+            {
+                var stream = new InMemoryRandomAccessStream();
+                await _control.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+                using var input = stream.AsStreamForRead();
+                using var ms = new System.IO.MemoryStream();
+                await input.CopyToAsync(ms, ct);
+                return ms.ToArray();
+            }
+            catch { return null; }
+        });
 
-    public Task OpenDevToolsAsync(CancellationToken ct = default)
-    {
-        if (_control?.CoreWebView2 is not null)
+    public Task OpenDevToolsAsync(CancellationToken ct = default) =>
+        _ui.RunAsync(() =>
         {
-            try { _control.CoreWebView2.OpenDevToolsWindow(); } catch { }
-        }
-        return Task.CompletedTask;
-    }
+            if (_control?.CoreWebView2 is not null)
+            {
+                try { _control.CoreWebView2.OpenDevToolsWindow(); } catch { }
+            }
+            return Task.FromResult(true);
+        });
 
     public Task SetZoomAsync(double zoom, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -673,8 +806,8 @@ public sealed class WebView2BrowserView : IBrowserView
     {
         if (_disposed) return;
         _disposed = true;
-        try { if (_control is not null) _control.Close(); } catch { }
-        _control = null!;
+        try { await _ui.RunAsync(() => { try { _control?.Close(); } catch { } _control = null!; return Task.FromResult(true); }).ConfigureAwait(false); }
+        catch { }
         await Task.CompletedTask;
     }
 }

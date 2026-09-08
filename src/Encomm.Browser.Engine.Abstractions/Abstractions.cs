@@ -102,6 +102,7 @@ public interface IBrowserView : IAsyncDisposable
     event EventHandler<NewWindowRequestEventArgs>? NewWindowRequested;
     event EventHandler<ResourceBlockedEventArgs>? ResourceBlocked;
     event EventHandler<RenderErrorEventArgs>? RenderError;
+    event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
 
     /// <summary>
     /// Navigate the live renderer to the URL. Must be called on a renderer
@@ -191,6 +192,25 @@ public sealed class AudioEventArgs : EventArgs
 {
     public required bool Playing { get; init; }
     public required bool Muted { get; init; }
+}
+
+/// <summary>
+/// A keyboard accelerator pressed while focus is inside page content.
+/// WebView2 child HWNDs receive keyboard input directly, bypassing the
+/// XAML accelerator table — so the adapter forwards unhandled keys here
+/// and the App layer runs the matching browser command synchronously.
+/// </summary>
+public sealed class AcceleratorKeyEventArgs : EventArgs
+{
+    public required uint VirtualKey { get; init; }
+    public required bool Ctrl { get; init; }
+    public required bool Shift { get; init; }
+    public required bool Alt { get; init; }
+    public required bool KeyDown { get; init; }
+    /// <summary>
+    /// Set to true by the subscriber to stop WebView2 default handling.
+    /// </summary>
+    public bool Handled { get; set; }
 }
 
 public sealed class DownloadEventArgs : EventArgs

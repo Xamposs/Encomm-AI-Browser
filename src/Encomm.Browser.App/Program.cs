@@ -87,6 +87,16 @@ public static class Program
                 Log(logPath, $"WebView2 runtime probe FAILED: {ex.Message}");
             }
 
+            // 4) Initialize the Windows App SDK bootstrap explicitly
+            // (the silent auto-initializer is disabled in the csproj).
+            // Try the SDK's exact min version first, then 0.0.0.0.
+            if (!TryBootstrap(logPath, 0x00010007, "stable", 7000, 522, 1444, 0)
+                && !TryBootstrap(logPath, 0x00010007, "", 0, 0, 0, 0))
+            {
+                Log(logPath, "FATAL: bootstrap failed; cannot activate WinUI. See https://learn.microsoft.com/windows/apps/windows-app-sdk/deploy-unpackaged-apps");
+                return 0xB001;
+            }
+
             // 4) Smoke-test mode bypasses XAML; exits 0/non-zero.
             if (Array.IndexOf(args, "--smoke-test") >= 0)
             {
@@ -97,6 +107,18 @@ public static class Program
             App.Services = App.BuildServicesStatic();
             App.SetStartupArgs(args);
             Log(logPath, "DI services built.");
+            try
+            {
+                var settings = App.Services.GetRequiredService<SettingsService>();
+                var lifecycle = App.Services.GetRequiredService<TabLifecycleManager>();
+                var runtime = App.Services.GetRequiredService<BrowserRuntime>();
+                lifecycle.ApplySettings(settings.Current, runtime);
+                Log(logPath, $"Lifecycle configured: preset={lifecycle.Preset} warm={lifecycle.WarmAfter} ghost={lifecycle.GhostAfter} saver={lifecycle.MemorySaverEnabled} pressureMB={settings.Current.MemoryPressureThresholdMB}");
+            }
+            catch (Exception ex)
+            {
+                Log(logPath, $"Lifecycle settings apply FAILED: {ex.GetType().Name}: {ex.Message}");
+            }
 
             // 6) Start XAML application on the UI thread.
             WinRT.ComWrappersSupport.InitializeComWrappers();
@@ -164,6 +186,33 @@ public static class Program
             try { Log(logPath, $"FATAL at startup: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}"); } catch { }
             try { File.WriteAllText(logPath + ".fatal.txt", ex.ToString()); } catch { }
             return 0xDEAD;
+        }
+    }
+
+    /// <summary>
+    /// Initialize the Windows App SDK bootstrap explicitly and log the
+    /// HRESULT. Returns true when a compatible framework was found.
+    /// Uses InitializeOptions.None so failures return an HRESULT instead
+    /// of showing UI or fail-fasting the process.
+    /// </summary>
+    private static bool TryBootstrap(string logPath, uint majorMinor, string versionTag,
+        ushort minMajor, ushort minMinor, ushort minBuild, ushort minRevision)
+    {
+        try
+        {
+            var minVersion = new Microsoft.Windows.ApplicationModel.DynamicDependency.PackageVersion(
+                minMajor, minMinor, minBuild, minRevision);
+            bool ok = Microsoft.Windows.ApplicationModel.DynamicDependency.Bootstrap.TryInitialize(
+                majorMinor, versionTag, minVersion,
+                Microsoft.Windows.ApplicationModel.DynamicDependency.Bootstrap.InitializeOptions.None,
+                out int hr);
+            Log(logPath, $"Bootstrap majorMinor=0x{majorMinor:X8} tag='{versionTag}' min={minMajor}.{minMinor}.{minBuild}.{minRevision}: ok={ok} hr=0x{hr:X8}");
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            Log(logPath, $"Bootstrap EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+            return false;
         }
     }
 

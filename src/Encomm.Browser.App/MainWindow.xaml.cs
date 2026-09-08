@@ -28,15 +28,17 @@ public sealed partial class MainWindow : Window
             ViewModel = App.Services.GetRequiredService<MainViewModel>();
             Title = "Encomm AI Browser";
             WireRuntimePrompts();
-            // Bind accelerator keys
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.L, Modifiers = VirtualKeyModifiers.Control });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.W, Modifiers = VirtualKeyModifiers.Control });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.T, Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.R, Modifiers = VirtualKeyModifiers.Control });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Left, Modifiers = VirtualKeyModifiers.Menu });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.Right, Modifiers = VirtualKeyModifiers.Menu });
-            this.Content.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F12 });
+            // Bind accelerator keys. Each accelerator invokes its command
+            // directly (relying on PreviewKeyDown alone is unreliable:
+            // focus navigation and the accelerator system can swallow
+            // keys such as Tab before preview handlers run).
+            AddAccelerator(Windows.System.VirtualKey.L, VirtualKeyModifiers.Control, () => { AddressBox.Focus(FocusState.Programmatic); AddressBox.SelectAll(); });
+            AddAccelerator(Windows.System.VirtualKey.T, VirtualKeyModifiers.Control, () => ViewModel.NewTabCommand.Execute(null));
+            AddAccelerator(Windows.System.VirtualKey.W, VirtualKeyModifiers.Control, () => ViewModel.CloseActiveTabCommand.Execute(null));
+            AddAccelerator(Windows.System.VirtualKey.T, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => ViewModel.ReopenClosedCommand.Execute(null));
+            AddAccelerator(Windows.System.VirtualKey.R, VirtualKeyModifiers.Control, () => ViewModel.ReloadCommand.Execute(null));
+            AddAccelerator(Windows.System.VirtualKey.Tab, VirtualKeyModifiers.Control, () => ViewModel.SelectNextTabCommand.Execute(null));
+            AddAccelerator(Windows.System.VirtualKey.Tab, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => ViewModel.SelectPreviousTabCommand.Execute(null));
             this.Content.PreviewKeyDown += OnPreviewKeyDown;
             AddressBox.Focus(FocusState.Programmatic);
         }
@@ -69,6 +71,48 @@ public sealed partial class MainWindow : Window
             var tabs = App.Services.GetRequiredService<TabService>();
             await tabs.OpenNewAsync(url, switchTo: false);
         };
+        // Keyboard shortcuts while focus is inside page content. WebView2
+        // child HWNDs bypass the XAML accelerator table, so the engine
+        // forwards owned combos here via a capture-phase script bridge.
+        // Enqueue onto the UI thread (safe from any thread) and claim
+        // every combo we own.
+        runtime.AcceleratorHandler = HandleWebAccelerator;
+    }
+
+    /// <summary>
+    /// Map a forwarded content-focus accelerator to a browser command.
+    /// Returns true when the combo is ours (suppresses WebView2 defaults).
+    /// </summary>
+    private bool HandleWebAccelerator(Encomm.Browser.Engine.Abstractions.AcceleratorKeyEventArgs e)
+    {
+        if (!e.KeyDown) return false;
+        Action? run = (e.VirtualKey, e.Ctrl, e.Shift, e.Alt) switch
+        {
+            (0x4C, true, false, false) => () => { AddressBox.Focus(FocusState.Programmatic); AddressBox.SelectAll(); },
+            (0x54, true, false, false) => () => ViewModel.NewTabCommand.Execute(null),
+            (0x57, true, false, false) => () => ViewModel.CloseActiveTabCommand.Execute(null),
+            (0x54, true, true, false) => () => ViewModel.ReopenClosedCommand.Execute(null),
+            (0x52, true, false, false) => () => ViewModel.ReloadCommand.Execute(null),
+            (0x09, true, false, false) => () => ViewModel.SelectNextTabCommand.Execute(null),
+            (0x09, true, true, false) => () => ViewModel.SelectPreviousTabCommand.Execute(null),
+            (0x25, false, false, true) => () => ViewModel.BackCommand.Execute(null),
+            (0x27, false, false, true) => () => ViewModel.ForwardCommand.Execute(null),
+            (0x7B, false, false, false) => () => OnPreviewDevTools(),
+            _ => null,
+        };
+        if (run is null) return false;
+        DispatcherQueue.TryEnqueue(() => { try { run(); } catch { } });
+        return true;
+    }
+
+    private void OnPreviewDevTools()
+    {
+        if (ViewModel.ActiveTab is null) return;
+        var runtime = App.Services.GetRequiredService<BrowserRuntime>();
+        _ = runtime.GetOrCreateAsync(ViewModel.ActiveTab).ContinueWith(t =>
+        {
+            if (t.Result is { } v) _ = v.OpenDevToolsAsync();
+        });
     }
 
     private async Task<bool> ShowPermissionDialogAsync(Encomm.Browser.Engine.Abstractions.PermissionKind kind, string origin)
@@ -133,9 +177,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void AddAccelerator(Windows.System.VirtualKey key, VirtualKeyModifiers modifiers, Action invoke)
+    {
+        var acc = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        acc.Invoked += (_, _) => invoke();
+        this.Content.KeyboardAccelerators.Add(acc);
+    }
+
     private void OnPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         var ctrl = (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control) & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
+        var shift = (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift) & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
         var alt = (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu) & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
         switch (e.Key)
         {
@@ -144,7 +196,7 @@ public sealed partial class MainWindow : Window
                 AddressBox.SelectAll();
                 e.Handled = true;
                 break;
-            case VirtualKey.T when ctrl && alt:
+            case VirtualKey.T when ctrl && shift:
                 ViewModel.ReopenClosedCommand.Execute(null);
                 e.Handled = true;
                 break;
@@ -168,15 +220,16 @@ public sealed partial class MainWindow : Window
                 ViewModel.ForwardCommand.Execute(null);
                 e.Handled = true;
                 break;
+            case VirtualKey.Tab when ctrl && shift:
+                ViewModel.SelectPreviousTabCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case VirtualKey.Tab when ctrl:
+                ViewModel.SelectNextTabCommand.Execute(null);
+                e.Handled = true;
+                break;
             case VirtualKey.F12:
-                if (ViewModel.ActiveTab is not null)
-                {
-                    var runtime = App.Services.GetRequiredService<BrowserRuntime>();
-                    _ = runtime.GetOrCreateAsync(ViewModel.ActiveTab).ContinueWith(t =>
-                    {
-                        if (t.Result is { } v) _ = v.OpenDevToolsAsync();
-                    });
-                }
+                OnPreviewDevTools();
                 e.Handled = true;
                 break;
         }

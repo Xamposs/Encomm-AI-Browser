@@ -14,9 +14,15 @@ public sealed class BrowserSettings
     public string SearchProviderUrl { get; set; } = "https://duckduckgo.com/?q={q}";
     public string NewTabUrl { get; set; } = "encomm://newtab";
     public bool MemorySaverEnabled { get; set; } = true;
-    public string MemoryPreset { get; set; } = "Balanced"; // Balanced | Aggressive | NeverSleep
+    public string MemoryPreset { get; set; } = "Balanced"; // Balanced | Aggressive | Adaptive | NeverSleep
     public int WarmTimeoutMinutes { get; set; } = 5;
     public int GhostTimeoutMinutes { get; set; } = 20;
+    /// <summary>
+    /// Process-tree threshold in MB for the Adaptive preset. When the
+    /// total (host + WebView2 children) exceeds this, unprotected tabs
+    /// ghost at half the configured Ghost timeout. 0 disables the check.
+    /// </summary>
+    public int MemoryPressureThresholdMB { get; set; } = 2048;
     public bool ShieldEnabled { get; set; } = true;
     public bool ShieldSafeBuiltInOnly { get; set; } = true;
     public bool RestoreLastSession { get; set; } = true;

@@ -54,6 +54,15 @@ public class BrowserRuntime : IAsyncDisposable
     /// </summary>
     public Func<string, bool, Task>? NewWindowHandlerAsync { get; set; }
 
+    /// <summary>
+    /// Optional keyboard-accelerator handler. Set by the UI layer.
+    /// Invoked synchronously on the WebView2 input thread when focus is
+    /// inside page content (where XAML accelerators never fire). Return
+    /// true to mark the key handled and suppress WebView2 defaults.
+    /// Implementations must not block; marshal to the UI thread.
+    /// </summary>
+    public Func<AcceleratorKeyEventArgs, bool>? AcceleratorHandler { get; set; }
+
     /// <summary>Last Ghost-restore total latency, for diagnostics.</summary>
     public TimeSpan LastRestoreLatency { get; private set; }
 
@@ -164,6 +173,22 @@ public class BrowserRuntime : IAsyncDisposable
         view.PermissionRequested += (_, e) => _ui.Post(() => _ = DecidePermissionAsync(tab, e));
         view.DownloadRequested += (_, e) => _ui.Post(() => _ = DecideDownloadAsync(tab, e));
         view.NewWindowRequested += (_, e) => _ui.Post(() => _ = HandleNewWindowAsync(tab, e));
+        // Accelerator keys forwarded from page content (JS bridge) are
+        // invoked inline — never posted — so a claimed combo is answered
+        // promptly. The UI layer's handler marshals command execution to
+        // the UI thread itself.
+        view.AcceleratorKeyPressed += (_, e) =>
+        {
+            try
+            {
+                var h = AcceleratorHandler;
+                if (h is not null && h(e)) e.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Accelerator handler failed for tab {Id}", tab.Id);
+            }
+        };
     }
 
     private async Task DecidePermissionAsync(TabRecord tab, PermissionRequestEventArgs e)
@@ -351,6 +376,10 @@ public class BrowserRuntime : IAsyncDisposable
                 LastRestoreLatency = sw.Elapsed;
                 return true;
             }
+            // Subscribe BEFORE navigating: a fast (cached/redirected) load
+            // can complete before a post-navigate subscription attaches,
+            // which previously produced false "did not complete" warnings.
+            var navigationWait = AwaitNavigationAsync(view, ct);
             var result = await view.NavigateAsync(tab.Url, ct).ConfigureAwait(false);
             if (!result.Accepted)
             {
@@ -359,10 +388,15 @@ public class BrowserRuntime : IAsyncDisposable
             }
             // Await the navigation-completion event so scroll restoration
             // lands on the loaded document instead of about:blank.
-            var navigated = await AwaitNavigationAsync(view, ct).ConfigureAwait(false);
-            if (!navigated)
+            var completed = await navigationWait.ConfigureAwait(false);
+            if (completed is null)
             {
-                _log.LogWarning("Restore navigation did not complete for {Id}", tab.Id);
+                _log.LogWarning("Restore navigation did not complete for {Id} (watchdog/cancelled)", tab.Id);
+            }
+            else if (!completed.Success)
+            {
+                _log.LogWarning("Restore navigation reported failure for {Id}: url={Url} error={Error}",
+                    tab.Id, completed.Url, completed.ErrorMessage);
             }
             try
             {
@@ -379,32 +413,44 @@ public class BrowserRuntime : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Restore failed for tab {Id}", tab.Id);
+            _log.LogError(ex, "Restore failed for tab {Id}: {Stack}", tab.Id, ex.ToString());
             return false;
         }
     }
 
-    private static Task<bool> AwaitNavigationAsync(IBrowserView view, CancellationToken ct)
+    /// <summary>
+    /// Subscribes to the next main-frame NavigationCompleted and returns
+    /// its payload. Null means the 20s watchdog or cancellation fired
+    /// first. Callers must subscribe BEFORE starting navigation: fast
+    /// loads can complete before a post-navigate subscription attaches.
+    /// </summary>
+    private static Task<NavigationCompletedEventArgs?> AwaitNavigationAsync(IBrowserView view, CancellationToken ct)
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<NavigationCompletedEventArgs?>(TaskCreationOptions.RunContinuationsAsynchronously);
         EventHandler<NavigationCompletedEventArgs>? handler = null;
         handler = (_, e) =>
         {
+            // Fresh views abort their initial about:blank load when the
+            // real navigation starts (ConnectionAborted). That completion
+            // is expected noise — keep waiting for the real document.
+            // (Restore/ensure only navigate http(s) URLs, so ignoring
+            // about:blank here can never skip the awaited load.)
+            if (e.Url is not null && e.Url.Contains("about:blank", StringComparison.OrdinalIgnoreCase)) return;
             if (handler is not null) view.NavigationCompleted -= handler;
-            tcs.TrySetResult(e.Success);
+            tcs.TrySetResult(e);
         };
         view.NavigationCompleted += handler;
         var reg = ct.Register(() =>
         {
             if (handler is not null) view.NavigationCompleted -= handler;
-            tcs.TrySetResult(false);
+            tcs.TrySetResult(null);
         });
         // Navigation watchdog: a page that never completes must not hang
         // restoration forever.
         var watchdog = Task.Delay(TimeSpan.FromSeconds(20), ct).ContinueWith(_ =>
         {
             if (handler is not null) view.NavigationCompleted -= handler;
-            tcs.TrySetResult(false);
+            tcs.TrySetResult(null);
         }, TaskScheduler.Default);
         _ = watchdog.ContinueWith(_ => reg.Dispose(), TaskScheduler.Default);
         return tcs.Task;
@@ -429,13 +475,14 @@ public class BrowserRuntime : IAsyncDisposable
         var current = view.CurrentUrl ?? "";
         if (string.IsNullOrEmpty(current) || current.Contains("about:blank", StringComparison.OrdinalIgnoreCase))
         {
+            var navigationWait = AwaitNavigationAsync(view, ct);
             var result = await view.NavigateAsync(tab.Url, ct).ConfigureAwait(false);
             if (!result.Accepted)
             {
                 _log.LogWarning("EnsureTabContent navigate failed for {Id}: {Reason}", tab.Id, result.Reason);
                 return false;
             }
-            await AwaitNavigationAsync(view, ct).ConfigureAwait(false);
+            await navigationWait.ConfigureAwait(false);
         }
         return true;
     }

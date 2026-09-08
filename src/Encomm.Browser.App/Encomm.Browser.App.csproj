@@ -14,8 +14,11 @@
     <EnableDefaultPriItems>false</EnableDefaultPriItems>
     <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
     <AppxPackage>false</AppxPackage>
-  <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
   <SelfContained>true</SelfContained>
+  <!-- Disable the silent bootstrap auto-initializer; Program.Main
+       initializes the bootstrap explicitly and logs the HRESULT. -->
+  <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>

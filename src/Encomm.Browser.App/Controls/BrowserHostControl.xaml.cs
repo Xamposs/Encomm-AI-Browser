@@ -84,18 +84,11 @@ public sealed partial class BrowserHostControl : UserControl
                 SetStatus(HostState.Error, "Renderer not ready. Engine may still be initializing.");
                 return;
             }
-            if (view.HostElement is not Microsoft.UI.Xaml.FrameworkElement fe)
-            {
-                SetStatus(HostState.Error, "Renderer reported no host element.");
-                return;
-            }
-            RootGrid.Children.Clear();
-            // Keep the StatusOverlay (child 0) and add the renderer on top.
-            RootGrid.Children.Add(fe);
-            _attachedElement = fe;
-            _attachedTabId = tab.Id;
-            SubscribeLoading(view);
-            SetStatus(HostState.Live, tab.Url ?? "");
+            // Visual-tree work must run on the UI thread: the awaits above
+            // may have resumed on a threadpool thread.
+            var capturedView = view;
+            var capturedTab = tab;
+            DispatcherQueue.TryEnqueue(() => Attach(capturedView, capturedTab));
         }
         catch (Exception ex)
         {
@@ -104,14 +97,37 @@ public sealed partial class BrowserHostControl : UserControl
         }
     }
 
+    private void Attach(IBrowserView view, TabRecord tab)
+    {
+        try
+        {
+            if (view.HostElement is not Microsoft.UI.Xaml.FrameworkElement fe)
+            {
+                SetStatus(HostState.Error, "Renderer reported no host element.");
+                return;
+            }
+            Detach();
+            RootGrid.Children.Add(fe);
+            _attachedElement = fe;
+            _attachedTabId = tab.Id;
+            SubscribeLoading(view);
+            SetStatus(HostState.Live, tab.Url ?? "");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Failed to attach renderer for tab {Id}", tab.Id);
+            SetStatus(HostState.Error, "Renderer error: " + ex.GetType().Name);
+        }
+    }
+
     private void SubscribeLoading(IBrowserView view)
     {
-        view.LoadingStateChanged += (_, e) =>
+        view.LoadingStateChanged += (_, e) => DispatcherQueue.TryEnqueue(() =>
         {
             if (e.IsLoading) SetStatus(HostState.Loading, "Loading…");
             else if (_attachedElement is not null) SetStatus(HostState.Live, _tabs.ActiveTab?.Url ?? "");
-        };
-        view.RenderError += (_, e) => SetStatus(HostState.Error, e.Message);
+        });
+        view.RenderError += (_, e) => DispatcherQueue.TryEnqueue(() => SetStatus(HostState.Error, e.Message));
     }
 
     private void Detach()
@@ -128,6 +144,11 @@ public sealed partial class BrowserHostControl : UserControl
 
     private void SetStatus(HostState state, string text)
     {
+        if (!DispatcherQueue.HasThreadAccess)
+        {
+            DispatcherQueue.TryEnqueue(() => SetStatus(state, text));
+            return;
+        }
         if (StatusOverlay is null) return;
         StatusOverlay.Text = text;
         // Show the overlay while loading, on error, or for the native
