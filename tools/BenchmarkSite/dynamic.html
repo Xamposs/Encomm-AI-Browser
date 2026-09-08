@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Encomm Benchmark — Dynamic DOM</title></head>
+<body>
+<h1>Dynamic DOM page</h1>
+<ul id="log"></ul>
+<script>
+(function () {
+  var log = document.getElementById('log');
+  var n = 0;
+  setInterval(function () {
+    n++;
+    var li = document.createElement('li');
+    li.textContent = 'tick ' + n + ' at ' + new Date().toISOString();
+    log.appendChild(li);
+    while (log.children.length > 50) log.removeChild(log.firstChild);
+  }, 500);
+})();
+</script>
+</body>
+</html>

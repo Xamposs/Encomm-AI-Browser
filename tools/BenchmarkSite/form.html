@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Encomm Benchmark — Form</title></head>
+<body>
+<h1>Form page (dirty-form detection target)</h1>
+<form id="f" onsubmit="return false;">
+  <label>Name <input type="text" name="name" id="name"></label><br>
+  <label>Notes <textarea name="notes" id="notes" rows="4" cols="40"></textarea></label><br>
+  <label>Choice
+    <select name="choice" id="choice"><option value="">—</option><option value="a">A</option><option value="b">B</option></select>
+  </label><br>
+  <div contenteditable="true" id="edit">editable region</div>
+</form>
+</body>
+</html>

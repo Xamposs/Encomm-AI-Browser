@@ -36,6 +36,35 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void Scroll_metadata_round_trip()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "encomm-test-" + System.Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var paths = new BrowserPaths(tmp);
+            using var store = new SqliteStore(paths.DatabaseFile);
+            var svc = new BrowserPersistenceService(store, Microsoft.Extensions.Logging.Abstractions.NullLogger<BrowserPersistenceService>.Instance);
+            var ws = new WorkspaceRecord(System.Guid.NewGuid(), "W", 0, true, System.DateTimeOffset.UtcNow);
+            svc.SaveWorkspace(ws);
+            var tab = new TabRecord(System.Guid.NewGuid(), ws.Id, "https://example.com/long", "Long page", "https://example.com/f.ico",
+                TabRendererStateKind.Ghost, TabLogicalStateKind.Background, false, false, false,
+                System.DateTimeOffset.UtcNow, System.DateTimeOffset.UtcNow, 0, null,
+                ScrollX: 0, ScrollY: 1234.5);
+            svc.SaveTab(tab);
+            var loaded = svc.LoadTabs(ws.Id);
+            Assert.Single(loaded);
+            Assert.Equal(0, loaded[0].ScrollX);
+            Assert.Equal(1234.5, loaded[0].ScrollY);
+            Assert.Equal("https://example.com/f.ico", loaded[0].FaviconUrl);
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Recently_closed_round_trip()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "encomm-test-" + System.Guid.NewGuid().ToString("N"));

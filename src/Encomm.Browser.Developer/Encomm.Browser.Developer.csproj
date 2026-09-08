@@ -12,6 +12,7 @@
     <AssemblyName>Encomm.Browser.Developer</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Encomm.Browser.Core\Encomm.Browser.Core.csproj" />
     <ProjectReference Include="..\Encomm.Browser.Engine.Abstractions\Encomm.Browser.Engine.Abstractions.csproj" />
   </ItemGroup>
 </Project>

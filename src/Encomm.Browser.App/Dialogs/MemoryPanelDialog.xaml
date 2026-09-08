@@ -5,26 +5,33 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Memory &amp; Lifecycle"
     CloseButtonText="Close">
-    <StackPanel Spacing="8" Width="520">
-        <TextBlock x:Name="MemorySummary" FontFamily="Consolas" />
-        <TextBlock x:Name="TabSummary" FontFamily="Consolas" />
-        <TextBlock x:Name="ShieldSummary" FontFamily="Consolas" />
-        <TextBlock Text="Tabs" FontWeight="SemiBold" />
-        <ListView x:Name="TabList" MaxHeight="280">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="120" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="{Binding RendererState}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2" Text="{Binding Url}" Opacity="0.7" />
-                    </Grid>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
-    </StackPanel>
+    <ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="8" Width="560">
+            <TextBlock Text="Memory (real process tree)" FontWeight="SemiBold" />
+            <TextBlock x:Name="MemorySummary" FontFamily="Consolas" />
+            <TextBlock Text="Tabs" FontWeight="SemiBold" />
+            <TextBlock x:Name="TabSummary" FontFamily="Consolas" />
+            <TextBlock Text="Shield" FontWeight="SemiBold" />
+            <TextBlock x:Name="ShieldSummary" FontFamily="Consolas" />
+            <TextBlock Text="State divergence (logical vs actual)" FontWeight="SemiBold" />
+            <TextBlock x:Name="DivergenceBlock" FontFamily="Consolas" Foreground="Crimson" />
+            <TextBlock Text="Tabs" FontWeight="SemiBold" />
+            <ListView x:Name="TabList" MaxHeight="280">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding RendererState}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="2" Text="{Binding Url}" Opacity="0.7" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+    </ScrollViewer>
 </ContentDialog>

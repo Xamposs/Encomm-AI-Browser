@@ -35,5 +35,6 @@
     <ProjectReference Include="..\..\src\Encomm.Browser.Memory\Encomm.Browser.Memory.csproj" />
     <ProjectReference Include="..\..\src\Encomm.Browser.Security\Encomm.Browser.Security.csproj" />
     <ProjectReference Include="..\..\src\Encomm.Browser.Settings\Encomm.Browser.Settings.csproj" />
+    <ProjectReference Include="..\..\src\Encomm.Browser.Developer\Encomm.Browser.Developer.csproj" />
   </ItemGroup>
 </Project>

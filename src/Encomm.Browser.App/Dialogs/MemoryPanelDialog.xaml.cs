@@ -2,6 +2,7 @@ using System.Timers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml.Controls;
 using Encomm.Browser.App.Services;
+using Encomm.Browser.Developer;
 using Encomm.Browser.Memory;
 using Encomm.Browser.Shield;
 
@@ -13,6 +14,7 @@ public sealed partial class MemoryPanelDialog : ContentDialog
     private readonly MemoryProbe _probe;
     private readonly IRequestBlocker _shield;
     private readonly BrowserRuntime _runtime;
+    private readonly StateDivergenceInspector _inspector;
     private readonly System.Timers.Timer _timer;
 
     public MemoryPanelDialog()
@@ -22,6 +24,7 @@ public sealed partial class MemoryPanelDialog : ContentDialog
         _probe = App.Services.GetRequiredService<MemoryProbe>();
         _shield = App.Services.GetRequiredService<IRequestBlocker>();
         _runtime = App.Services.GetRequiredService<BrowserRuntime>();
+        _inspector = new StateDivergenceInspector(_tabs.Tabs, _runtime.Views);
         _timer = new System.Timers.Timer(1000) { AutoReset = true };
         _timer.Elapsed += (_, _) => DispatcherQueue.TryEnqueue(Refresh);
         Opened += (_, _) => { Refresh(); _timer.Start(); };
@@ -54,6 +57,19 @@ public sealed partial class MemoryPanelDialog : ContentDialog
             });
         }
         TabList.ItemsSource = items;
+
+        // Update the divergence block. This is the Phase 2B invariant
+        // check: logical tab states must match actual renderer instances.
+        try
+        {
+            var div = _inspector.Inspect();
+            if (DivergenceBlock is not null)
+            {
+                DivergenceBlock.Text = StateDivergenceFormatter.Format(div);
+                DivergenceBlock.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            }
+        }
+        catch { }
     }
 
     private static string Format(long bytes)

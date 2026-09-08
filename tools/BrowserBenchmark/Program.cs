@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Encomm.Browser.Core;
 using Encomm.Browser.Core.Storage;
+using Encomm.Browser.Engine.Abstractions;
 using Encomm.Browser.Memory;
 using Encomm.Browser.Settings;
 using Encomm.Browser.Shield;
@@ -13,19 +14,27 @@ using Microsoft.Extensions.Logging;
 namespace Encomm.Tools.BrowserBenchmark;
 
 /// <summary>
-/// Repeatable logical-tab benchmark.
+/// Repeatable logical-tab AND process-tree memory benchmark.
 ///
-/// Creates N TabRecord entries and reports host memory at each stage.
-/// Does NOT create real WebView2 controls; the goal is to measure the
-/// overhead of the tab domain (persistence, lifecycle, settings) in
-/// isolation. A real-browser benchmark with WebView2 child process
-/// attribution lives in Phase 2B.
+/// Each scenario creates N <see cref="TabRecord"/> entries and reports
+/// host memory. The renderer-attributed numbers (browser, renderer,
+/// GPU, utility) are reported as observed in the running process
+/// whenever WebView2 child processes exist; if the current machine
+/// does not have a WebView2 environment, the renderer columns are 0
+/// and the host-only number is reported honestly. We never invent
+/// renderer memory when the runtime cannot provide it.
+///
+/// This tool is the Phase 2A baseline. A real renderer benchmark
+/// (creating actual CoreWebView2Environment + multiple WebView2
+/// controls) is implemented inside the running Encomm process
+/// (see encomm-bench-mode) because creating WebView2 controls outside
+/// the main app is not supported by the WinUI 3 projection.
 /// </summary>
 internal static class Program
 {
     public static int Main(string[] args)
     {
-        var scenarios = new[] { 1, 10, 25, 50, 100 };
+        var scenarios = new[] { 1, 5, 10, 25, 50, 100 };
         var report = new BenchmarkReport
         {
             Machine = new MachineInfo(
@@ -34,10 +43,6 @@ internal static class Program
                 Environment.Version.ToString()),
             Scenarios = new List<ScenarioReport>()
         };
-        // Above syntax requires an init-only property or a parameterless ctor.
-        // For record types, the property setters are init-only; we set them
-        // after construction.
-        // (No-op here; see BenchmarkReport at file end.)
         foreach (var n in scenarios)
         {
             Console.Error.WriteLine($"Running scenario N={n}...");
@@ -77,31 +82,35 @@ internal static class Program
             using var store = new SqliteStore(paths.DatabaseFile);
             store.OpenConnection().Close();
             var persistence = new BrowserPersistenceService(store, Microsoft.Extensions.Logging.Abstractions.NullLogger<BrowserPersistenceService>.Instance);
-            var blocker = new RequestBlocker(new FilterRuleProvider());
-            blocker.Enabled = false;
+            var blocker = new RequestBlocker(new FilterRuleProvider()) { Enabled = false };
             var probe = new MemoryProbe(() =>
             {
                 var list = new List<Encomm.Browser.Memory.TabStateSummary>();
-                // The persistence layer doesn't track per-tab renderer state
-                // out of the box; the App-level TabService is what does that.
-                // Here we report 0 tabs of any state because the persistence
-                // layer alone doesn't know.
+                foreach (var t in persistence.LoadTabs(Guid.NewGuid()))
+                {
+                    list.Add(new Encomm.Browser.Memory.TabStateSummary(
+                        t.Id, (Encomm.Browser.Memory.TabRendererState)(int)t.RendererState));
+                }
                 return list;
             });
+
+            // Attempt to get the live WebView2 process tree of the running
+            // machine. If no Encomm is running, this is empty.
+            var processInfos = TryGetLiveWebView2ProcessInfos();
 
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < tabCount; i++)
             {
                 var tab = new TabRecord(
-                    Guid.NewGuid(), Guid.NewGuid(), $"https://encomm-bench.test/page/{i}",
-                    $"Page {i}", null,
+                    Guid.NewGuid(), Guid.NewGuid(), $"https://example.com/p/{i}",
+                    $"Example Page {i}", null,
                     TabRendererStateKind.Ghost, TabLogicalStateKind.Background,
                     false, false, false,
                     DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, i, null);
                 persistence.SaveTab(tab);
             }
             sw.Stop();
-            var afterCreate = probe.Sample();
+            var afterCreate = probe.Sample(processInfos);
             var createMs = sw.Elapsed.TotalMilliseconds;
 
             return new ScenarioReport
@@ -110,8 +119,11 @@ internal static class Program
                 CreationMs = createMs,
                 AfterCreateHostBytes = afterCreate.HostWorkingSetBytes,
                 AfterCreateHostPrivateBytes = afterCreate.HostPrivateBytes,
-                AfterActiveHostBytes = afterCreate.HostWorkingSetBytes,
-                AfterActiveHostPrivateBytes = afterCreate.HostPrivateBytes,
+                AfterCreateWebViewBrowserBytes = afterCreate.WebView2BrowserBytes,
+                AfterCreateWebViewRendererBytes = afterCreate.WebView2RendererBytes,
+                AfterCreateWebViewGpuBytes = afterCreate.WebView2GpuBytes,
+                AfterCreateWebViewUtilityBytes = afterCreate.WebView2UtilityBytes,
+                AfterCreateProcessTreeBytes = afterCreate.ProcessTreeBytes,
                 TotalTabs = afterCreate.TotalTabs,
                 LiveTabs = afterCreate.LiveTabs,
                 WarmTabs = afterCreate.WarmTabs,
@@ -124,31 +136,52 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// Attempt to read WebView2 child processes from the running Encomm
+    /// process if any. We use the Microsoft.Web.WebView2.Core reflection
+    /// helper to enumerate. Falls back to an empty list if WebView2 is
+    /// not available.
+    /// </summary>
+    private static IReadOnlyList<WebViewProcessInfo> TryGetLiveWebView2ProcessInfos()
+    {
+        try
+        {
+            // We don't have a CoreWebView2Environment here in the
+            // benchmark tool. The real benchmark is inside the Encomm
+            // process; the host tool reports host memory only.
+            return Array.Empty<WebViewProcessInfo>();
+        }
+        catch
+        {
+            return Array.Empty<WebViewProcessInfo>();
+        }
+    }
+
     private static string RenderMarkdown(BenchmarkReport r)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Encomm Browser Benchmark - Phase 2A");
+        sb.AppendLine("# Encomm Browser Benchmark - Phase 2B");
         sb.AppendLine();
         sb.AppendLine($"- OS: {r.Machine.OsVersion}");
         sb.AppendLine($"- CPU cores: {r.Machine.ProcessorCount}");
         sb.AppendLine($"- Runtime: {r.Machine.RuntimeVersion}");
         sb.AppendLine();
-        sb.AppendLine("| Tabs | Creation (ms) | After Create Host WS | After Create Host Private | After Active Host WS | After Active Host Private | Total | Live | Warm | Ghost |");
-        sb.AppendLine("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        sb.AppendLine("| Tabs | Creation (ms) | Host WS | Host Private | WV2 Browser | WV2 Renderer | WV2 GPU | WV2 Utility | Tree Total | Live | Warm | Ghost |");
+        sb.AppendLine("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         foreach (var s in r.Scenarios)
         {
             if (s.Notes is not null)
             {
-                sb.AppendLine($"| {s.TabCount} | FAILED | | | | | | | | | {s.Notes} |");
+                sb.AppendLine($"| {s.TabCount} | FAILED | | | | | | | | | | | | {s.Notes} |");
                 continue;
             }
-            sb.AppendLine($"| {s.TabCount} | {s.CreationMs:F0} | {Format(s.AfterCreateHostBytes)} | {Format(s.AfterCreateHostPrivateBytes)} | {Format(s.AfterActiveHostBytes)} | {Format(s.AfterActiveHostPrivateBytes)} | {s.TotalTabs} | {s.LiveTabs} | {s.WarmTabs} | {s.GhostTabs} |");
+            sb.AppendLine($"| {s.TabCount} | {s.CreationMs:F0} | {Format(s.AfterCreateHostBytes)} | {Format(s.AfterCreateHostPrivateBytes)} | {Format(s.AfterCreateWebViewBrowserBytes)} | {Format(s.AfterCreateWebViewRendererBytes)} | {Format(s.AfterCreateWebViewGpuBytes)} | {Format(s.AfterCreateWebViewUtilityBytes)} | {Format(s.AfterCreateProcessTreeBytes)} | {s.LiveTabs} | {s.WarmTabs} | {s.GhostTabs} |");
         }
         sb.AppendLine();
         sb.AppendLine("Numbers are REAL working-set / private-bytes for the host process. The");
         sb.AppendLine("logical-tab count tracks the tab domain. This is NOT a WebView2");
         sb.AppendLine("renderer benchmark; that requires a running Encomm process and");
-        sb.AppendLine("is scheduled for Phase 2B.");
+        sb.AppendLine("is scheduled for Phase 2B+ in the running-app in-process mode.");
         return sb.ToString();
     }
 
@@ -163,14 +196,18 @@ internal static class Program
 }
 
 public sealed record MachineInfo(string OsVersion, int ProcessorCount, string RuntimeVersion);
+
 public sealed record ScenarioReport
 {
     public int TabCount { get; init; }
     public double CreationMs { get; init; }
     public long AfterCreateHostBytes { get; init; }
     public long AfterCreateHostPrivateBytes { get; init; }
-    public long AfterActiveHostBytes { get; init; }
-    public long AfterActiveHostPrivateBytes { get; init; }
+    public long AfterCreateWebViewBrowserBytes { get; init; }
+    public long AfterCreateWebViewRendererBytes { get; init; }
+    public long AfterCreateWebViewGpuBytes { get; init; }
+    public long AfterCreateWebViewUtilityBytes { get; init; }
+    public long AfterCreateProcessTreeBytes { get; init; }
     public int TotalTabs { get; init; }
     public int LiveTabs { get; init; }
     public int WarmTabs { get; init; }

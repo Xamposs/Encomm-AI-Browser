@@ -10,9 +10,9 @@ internal static class Program
         Console.WriteLine("Encomm MemoryProbe — single-process RSS sample.");
         var probe = new Encomm.Browser.Memory.MemoryProbe(() => System.Array.Empty<Encomm.Browser.Memory.TabStateSummary>());
         var s = probe.Sample();
-        Console.WriteLine($"Working set:  {Format(s.WorkingSetBytes)}");
-        Console.WriteLine($"Private:      {Format(s.PrivateBytes)}");
-        Console.WriteLine($"PID:          {Environment.ProcessId}");
+        Console.WriteLine($"Working set:  {Format(s.HostWorkingSetBytes)}");
+        Console.WriteLine($"Private:      {Format(s.HostPrivateBytes)}");
+        Console.WriteLine($"PID:          {s.HostProcessId}");
         Console.WriteLine($"Process:      {Process.GetCurrentProcess().ProcessName}");
         Console.WriteLine($"Sampled UTC:  {s.SampledUtc:o}");
         return 0;
