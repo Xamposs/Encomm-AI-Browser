@@ -23,6 +23,58 @@ public partial class App : Application
     public static IUiDispatcher Ui { get; private set; } = null!;
     public static DispatcherQueue? MainDispatcherQueue { get; private set; }
     public static string[]? StartupArgs { get; private set; }
+
+    /// <summary>
+    /// Benchmark profile root. Null in normal browsing (uses
+    /// BrowserPaths.Default()). Set by BeginBenchProfile before any
+    /// storage or engine initializes; BuildServicesStatic then builds
+    /// the ENTIRE service graph (SQLite, settings, secrets) inside the
+    /// isolated folder.
+    /// </summary>
+    public static string? ProfileRoot { get; private set; }
+
+    public static bool IsBenchMode => ProfileRoot is not null;
+
+    /// <summary>
+    /// Phase 2C items 19-21: isolate benchmark I/O from the real user
+    /// profile. Creates BenchmarkProfiles/&lt;run-id&gt;, points the
+    /// WebView2 user-data override there (honored by the engine's
+    /// environment creation), and purges profiles older than 7 days.
+    /// Logs to the normal log file (always safe to share).
+    /// </summary>
+    public static void BeginBenchProfile(string logPath)
+    {
+        try
+        {
+            var root = Path.Combine(
+                BrowserPaths.Default().RootDirectory, "BenchmarkProfiles");
+            Directory.CreateDirectory(root);
+            // Purge stale profiles; never touch the live one (just made).
+            foreach (var d in Directory.GetDirectories(root))
+            {
+                try
+                {
+                    if (Directory.GetCreationTimeUtc(d) < DateTime.UtcNow.AddDays(-7))
+                        Directory.Delete(d, true);
+                }
+                catch { }
+            }
+            var runId = "run-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss")
+                + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            var dir = Path.Combine(root, runId);
+            Directory.CreateDirectory(dir);
+            ProfileRoot = dir;
+            Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER",
+                Path.Combine(dir, "WebView2UD"));
+            try
+            {
+                File.AppendAllText(logPath,
+                    $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff} [bench] Isolated profile: {dir}{Environment.NewLine}");
+            }
+            catch { }
+        }
+        catch { /* isolation is best-effort; bench still validates state */ }
+    }
 #pragma warning disable CS0649
     private Window? _mainWindow;
 #pragma warning restore CS0649
@@ -62,14 +114,17 @@ public partial class App : Application
     public static IServiceProvider BuildServicesStatic()
     {
         var services = new ServiceCollection();
+        // Bench mode builds the whole graph inside the isolated profile
+        // (item 20); normal browsing uses the real user profile.
+        var paths = ProfileRoot is null ? BrowserPaths.Default() : new BrowserPaths(ProfileRoot);
         services.AddLogging(b =>
         {
             b.AddProvider(new LocalFileLoggerProvider(
-                Path.Combine(BrowserPaths.Default().LogsDirectory, "encomm.log")));
+                Path.Combine(paths.LogsDirectory, "encomm.log")));
         });
 
-        services.AddSingleton(BrowserPaths.Default());
-        services.AddSingleton<SqliteStore>(sp => new SqliteStore(BrowserPaths.Default().DatabaseFile));
+        services.AddSingleton(paths);
+        services.AddSingleton<SqliteStore>(sp => new SqliteStore(paths.DatabaseFile));
         services.AddSingleton<ISecretStore, DpapiSqliteSecretStore>();
         services.AddSingleton<SettingsStore>();
         services.AddSingleton<SettingsService>();

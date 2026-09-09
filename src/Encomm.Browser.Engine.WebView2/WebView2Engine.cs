@@ -801,13 +801,21 @@ public sealed class WebView2BrowserView : IBrowserView
         try
         {
             using var outer = System.Text.Json.JsonDocument.Parse(json);
+            // ExecuteScriptAsync may return the object directly (Object)
+            // or a JSON-encoded string (String), depending on path.
+            if (outer.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                var x = outer.RootElement.TryGetProperty("x", out var xv) && xv.TryGetDouble(out var xd) ? xd : 0;
+                var y = outer.RootElement.TryGetProperty("y", out var yv) && yv.TryGetDouble(out var yd) ? yd : 0;
+                return (x, y);
+            }
             if (outer.RootElement.ValueKind != System.Text.Json.JsonValueKind.String) return (0, 0);
             var inner = outer.RootElement.GetString();
             if (string.IsNullOrEmpty(inner)) return (0, 0);
             using var doc = System.Text.Json.JsonDocument.Parse(inner);
-            var x = doc.RootElement.TryGetProperty("x", out var xv) ? xv.GetDouble() : 0;
-            var y = doc.RootElement.TryGetProperty("y", out var yv) ? yv.GetDouble() : 0;
-            return (x, y);
+            var x2 = doc.RootElement.TryGetProperty("x", out var xv2) && xv2.TryGetDouble(out var xd2) ? xd2 : 0;
+            var y2 = doc.RootElement.TryGetProperty("y", out var yv2) && yv2.TryGetDouble(out var yd2) ? yd2 : 0;
+            return (x2, y2);
         }
         catch { return (0, 0); }
     }
@@ -828,7 +836,16 @@ public sealed class WebView2BrowserView : IBrowserView
                 // also captures scroll position so the saved metadata is complete.
                 const string script = "(() => { try { return { d: document.contentDescription || (document.querySelector('meta[name=description]')||{}).content || '', sel: (window.getSelection && window.getSelection().toString()) || '', ex: (document.body && (document.body.innerText||'').slice(0, 2000)) || '', x: window.scrollX || 0, y: window.scrollY || 0 }; } catch(e) { return null; } })();";
                 var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
-                return Security.PageContextParser.Parse(result, url, title);
+                var parsed = Security.PageContextParser.Parse(result, url, title);
+                // Scroll is load-bearing for Ghost restore: merge the
+                // dedicated scroll read (proven reliable) over whatever
+                // the combined script reported.
+                try
+                {
+                    var (sx, sy) = await GetScrollAsync(ct);
+                    return parsed with { ScrollX = sx, ScrollY = sy };
+                }
+                catch { return parsed; }
             }
             catch
             {

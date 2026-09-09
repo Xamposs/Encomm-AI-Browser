@@ -1,114 +1,101 @@
 # Deployment
 
-This document explains the current deployment model of the Encomm-AI-Browser
-binary, why we chose it, and the known limitations. Read this first if
-launching the produced `Encomm.exe` fails.
+Live-verified configuration (matches `src/Encomm.Browser.App/Encomm.Browser.App.csproj` —
+a unit test pins these three properties, so this document cannot drift silently).
 
-## Current decision: **unpackaged, self-contained .NET, WinAppSDK 1.7**
+## Current decision: unpackaged WinUI 3, self-contained .NET, framework-dependent WinAppSDK 1.7
 
 ```
 <OutputType>WinExe</OutputType>
 <WindowsPackageType>None</WindowsPackageType>
-<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
 <SelfContained>true</SelfContained>
+<WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
 <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
 <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250606001" />
 ```
 
-* `WindowsPackageType=None` — unpackaged (no MSIX).
-* `WindowsAppSDKSelfContained=true` — the WinAppRuntime payload is
-  extracted into the build output (`MsixContent/`) so the app carries
-  the exact runtime it was built against.
-* `SelfContained=true` — .NET runtime is shipped in the bin output so
-  no .NET install is required to run the EXE.
-* Pinned to **Windows App SDK 1.7.250606001** to match the
-  system-installed `MicrosoftCorporationII.WinAppRuntime.1.7`
-  framework on the dev machine. Do not upgrade the SDK without
-  re-verifying startup, build, and tests in one focused commit.
+In precise terms:
 
-The Windows App Runtime native DLL (`Microsoft.WindowsAppRuntime.dll`)
-is force-loaded from the application directory at startup
-(`Program.Main` → `WindowsAppRuntime_EnsureIsLoaded`), which is the
-same call the SDK's UndockedRegFreeWinRT auto-initializer makes.
+- **Application**: unpackaged WinUI 3 desktop app (`WindowsPackageType=None`, no MSIX, no Store).
+- **.NET**: self-contained (`SelfContained=true`). The output carries the .NET runtime; the user needs no separate .NET install.
+- **Windows App SDK**: framework-dependent (`WindowsAppSDKSelfContained=false`).
+  The WinAppRuntime payload is NOT bundled. Explicit bootstrap
+  (`WindowsAppSdkBootstrapInitialize=false`, and `Program.Main`
+  calls `Bootstrap.TryInitialize`) requires a compatible
+  `MicrosoftCorporationII.WinAppRuntime.1.7` framework registered for
+  the current user. `Program.Main` also force-loads
+  `Microsoft.WindowsAppRuntime.dll` from the application directory
+  (`WindowsAppRuntime_EnsureIsLoaded`).
 
-### Rationale
-
-* **Memory efficiency** — the .NET self-contained build already adds
-  ~60 MB of framework assemblies. Shipping the full WinAppRuntime MSIX
-  inside that would more than double the on-disk size, AND the
-  WinAppRuntime MSIX is shared across processes on the machine
-  (browser, electron, other WinAppSDK apps), so a system install
-  actually reduces TOTAL memory across apps.
-* **Simple public distribution** — the produced bin output is a
-  regular xcopy-deployable folder. No MSIX signing, no Store, no
-  Windows App Cert Kit.
-* **Clean servicing** — Windows Update handles the WinAppRuntime; the
-  user does not need to update the browser binary every time Microsoft
-  pushes a runtime patch.
-* **Reproducible builds** — framework-dependent gives byte-identical
-  output across machines, which is important for an internal alpha.
+The earlier `0xC000027D` / bootstrap `0x80670016` launch failure on
+the dev machine was environmental (missing per-user framework
+registration), resolved by installing the Main / Singleton / DDLM
+framework closure. **The app launches**; both smoke levels pass.
 
 ### What must be present on the target machine
 
-* Windows 10 19041 or later (we test on 10.0.19045).
-* WebView2 Runtime ≥ 110 (we test on 152.x).
-* No Visual Studio required for end users. The self-contained output
-  carries .NET and the WinAppRuntime payload; only the WebView2
-  Runtime is a shared system prerequisite (it ships with Windows 11
-  and current Edge).
+- Windows 10 19041+ (tested on 10.0.19045) or Windows 11.
+- WinAppRuntime 1.7 framework registered for the user (comes with
+  Visual Studio 2022+, or the WinAppSDK 1.7 redist installer).
+- WebView2 Runtime 110+ (tested on 152.0.4191.66; ships with
+  Windows 11 and current Edge). Missing runtime → startup log
+  records `WebView2 runtime probe FAILED` and smoke tests exit
+  non-zero.
+- No Visual Studio required for end users.
 
-If the WebView2 Runtime is missing, `Program.Main` logs
-`WebView2 runtime probe FAILED` and `--smoke-test` exits non-zero
-with an actionable message. `scripts/diagnose.ps1` reports the
-relevant environment.
+`scripts/diagnose.ps1` reports the relevant environment.
 
-### Why self-contained?
+### Rationale (why not bundle the runtime)
 
-On this project's dev machine the framework-package bootstrap
-(`MDDbootstrap TryInitialize`) returns `0x80670016`
-(`MDD_E_PACKAGE_NOT_FOUND`) even though a WinAppRuntime framework is
-installed — the package is not visible to the bootstrap in this user
-session, and the process then dies inside `combase.dll` when XAML
-tries to activate. Self-contained carries the exact runtime payload
-in the output so behavior does not depend on per-user framework
-registration. The trade-off is on-disk size (~60 MB of framework
-assemblies plus the runtime payload).
+- The .NET self-contained output is already large; bundling the full
+  WinAppRuntime payload would grow it further.
+- The WinAppRuntime framework is shared across processes on the
+  machine (other WinAppSDK apps, widgets), so a system install
+  reduces TOTAL memory and servicing churn.
+- Windows Update / the redist installer services the runtime; the
+  browser binary does not rev on every Microsoft runtime patch.
+- Output stays xcopy-deployable: no MSIX signing, no Store, no
+  App Cert Kit.
 
-If a future WinAppSDK release unifies the projections, we will
-re-evaluate.
+If a future WinAppSDK release changes the trade-off, re-evaluate in
+one focused commit with a launch + test re-verification. Do NOT
+flip deployment properties to make documentation easier; document
+reality (this file) and let installers ensure prerequisites.
 
-### Why not an MSIX (packaged)?
+## Diagnostics
 
-Packaging adds:
-* Code-signing (Authenticode) — required for the MSIX.
-* A manifest that pins the application identity.
-* Store / sideload deployment complexity.
+- `Encomm.exe --runtime-smoke-test`: WebView2 discovery + data-folder
+  write + SQLite round-trip, no XAML. Exit 0/non-zero.
+- `Encomm.exe --browser-smoke-test`: real renderer + local-page
+  navigation + title verification inside the XAML loop.
+- `Encomm.exe --run-bench[=ID]`: in-app renderer benchmark into an
+  isolated profile (`BenchmarkProfiles/<run-id>`), never touching
+  the real user profile.
 
-None of this is in scope for Phase 2A.
+## Verified (Phase 2C)
 
-## Verified
+- `dotnet build src/Encomm.Browser.App/Encomm.Browser.App.csproj -c Release` — zero warnings.
+- `dotnet test tests/Encomm.Browser.Tests/Encomm.Browser.Tests.csproj -c Release` — 90/90.
+- In-app benchmark scenarios A–H + H1/H3/H5 + CREATE/RESTORE/WEB with
+  measured process-tree memory; see `docs/PHASE_2C_REPORT.md`.
 
-* `dotnet build src/Encomm.Browser.App/Encomm.Browser.App.csproj -c Release` —
-  succeeds with zero warnings.
-* `dotnet test tests/Encomm.Browser.Tests/Encomm.Browser.Tests.csproj` —
-  28 / 28 tests passing in Debug and Release.
-* `tools/BrowserBenchmark` runs end-to-end and produces a JSON +
-  Markdown report at `tools/BrowserBenchmark/benchmark.{json,md}`.
-* `scripts/diagnose.ps1` produces a safe environment report at
-  `diagnose.txt`.
+## End-user runtime plan (future installer/bootstrapper)
 
-## Known launch issue on this dev machine
+Normal users must never install Visual Studio, run developer
+commands, or troubleshoot framework registration. A future
+installer/bootstrapper (not implemented in this phase) should:
 
-On the workstation where Phase 2A was developed, the produced
-`Encomm.exe` does not finish launching. The cause is that the
-installed Windows App Runtime 2.2 MSIX is not visible to the
-bootstrap's package lookup (it returns `0x80670016`
-`MDD_E_PACKAGE_NOT_FOUND`). The same binary will launch on any
-machine where the framework package is properly registered for the
-current user (e.g. any Visual Studio 2022+ install, or after
-running `WindowsAppRuntimeInstall.exe` from the WinAppSDK redist).
+1. Detect OS version (block below Win10 19041 with a clear message).
+2. Check for a compatible WinAppRuntime 1.7+ framework registration.
+3. Install the WinAppSDK 1.7 redist (`WindowsAppRuntimeInstall.exe`)
+   if missing (per-user, no elevation beyond the redist's own needs).
+4. Check the WebView2 Runtime version (Evergreen installer bootstrapper).
+5. Install/refresh WebView2 Runtime if missing or too old.
+6. Install Encomm (xcopy layout + Start Menu shortcut; MSIX only if
+   identity/store distribution is chosen later).
+7. Launch the browser and run `--runtime-smoke-test` silently first;
+   on failure, show the log location instead of a blank window.
 
-See `docs/PHASE_2A_REPORT.md` for full details.
-## Phase 2B addition
-
-A --smoke-test mode verifies WinAppRuntime + WebView2 load without launching XAML. The Encomm architecture now drives real CoreWebView2.TrySuspendAsync (Warm), real Ghost (WebView2 control disposal), and real Ghost restore (fresh view + stored-URL navigation + scroll restoration). State-divergence diagnostics in the in-app Developer Mode memory panel detect logical/actual renderer mismatches. The benchmark tool is host-only; renderer-attributed memory is available inside the running app.
+Until that installer exists, distribution = pinned Release folder +
+this document.

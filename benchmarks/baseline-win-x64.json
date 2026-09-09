@@ -1,0 +1,137 @@
+{
+  "generatedUtc": "2026-09-10T01:15:00Z",
+  "benchmarkVersion": "2C.1",
+  "commit": "7d422ca + uncommitted 2C work (BenchmarkVersion 2C.1); re-baseline after engine changes",
+  "scenarios": [
+    {
+      "id": "A",
+      "runs": 3,
+      "treeMedian": 428351488,
+      "treeMin": 424902656,
+      "treeMax": 432779264,
+      "viewCount": 1
+    },
+    {
+      "id": "B",
+      "runs": 1,
+      "treeMedian": 667082752,
+      "treeMin": 667082752,
+      "treeMax": 667082752,
+      "viewCount": 5
+    },
+    {
+      "id": "C",
+      "runs": 3,
+      "treeMedian": 964190208,
+      "treeMin": 956022784,
+      "treeMax": 966676480,
+      "viewCount": 10
+    },
+    {
+      "id": "CREATE",
+      "runs": 1,
+      "treeMedian": 159928320,
+      "treeMin": 159928320,
+      "treeMax": 159928320,
+      "viewCount": 0
+    },
+    {
+      "id": "D",
+      "runs": 3,
+      "treeMedian": 982089728,
+      "treeMin": 981434368,
+      "treeMax": 984084480,
+      "viewCount": 10
+    },
+    {
+      "id": "D-pre",
+      "runs": 3,
+      "treeMedian": 958222336,
+      "treeMin": 957665280,
+      "treeMax": 960274432,
+      "viewCount": 10
+    },
+    {
+      "id": "E",
+      "runs": 4,
+      "treeMedian": 477063168,
+      "treeMin": 475729920,
+      "treeMax": 480432128,
+      "viewCount": 1
+    },
+    {
+      "id": "E-pre",
+      "runs": 4,
+      "treeMedian": 963205120,
+      "treeMin": 957886464,
+      "treeMax": 969949184,
+      "viewCount": 10
+    },
+    {
+      "id": "F",
+      "runs": 1,
+      "treeMedian": 554577920,
+      "treeMin": 554577920,
+      "treeMax": 554577920,
+      "viewCount": 3
+    },
+    {
+      "id": "G",
+      "runs": 1,
+      "treeMedian": 560865280,
+      "treeMin": 560865280,
+      "treeMax": 560865280,
+      "viewCount": 3
+    },
+    {
+      "id": "H",
+      "runs": 3,
+      "treeMedian": 572211200,
+      "treeMin": 569356288,
+      "treeMax": 574881792,
+      "viewCount": 3
+    },
+    {
+      "id": "H1",
+      "runs": 1,
+      "treeMedian": 458670080,
+      "treeMin": 458670080,
+      "treeMax": 458670080,
+      "viewCount": 1
+    },
+    {
+      "id": "H5",
+      "runs": 1,
+      "treeMedian": 698441728,
+      "treeMin": 698441728,
+      "treeMax": 698441728,
+      "viewCount": 5
+    },
+    {
+      "id": "RESTORE-A",
+      "runs": 1,
+      "treeMedian": 475635712,
+      "treeMin": 475635712,
+      "treeMax": 475635712,
+      "viewCount": 1
+    },
+    {
+      "id": "RESTORE-B",
+      "runs": 1,
+      "treeMedian": 586272768,
+      "treeMin": 586272768,
+      "treeMax": 586272768,
+      "viewCount": 3
+    },
+    {
+      "id": "WEB",
+      "runs": 1,
+      "treeMedian": 586686464,
+      "treeMin": 586686464,
+      "treeMax": 586686464,
+      "viewCount": 3
+    }
+  ],
+  "restoreTotalMedianMs": 88,
+  "note": "Informational thresholds only: +15% tree, +20% restore, renderer-count mismatch."
+}

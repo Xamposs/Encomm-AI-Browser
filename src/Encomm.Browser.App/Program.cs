@@ -62,6 +62,16 @@ public static class Program
             Log(logPath, "=== Encomm AI Browser startup ===");
             Log(logPath, $"Process: {Environment.ProcessId}, args=[{string.Join(",", args)}]");
 
+            // Benchmark isolation (Phase 2C items 19-21): bench mode runs
+            // in a throwaway profile — isolated SQLite/settings AND an
+            // isolated WebView2 user-data folder — so benchmark tabs,
+            // cookies, cache and history NEVER touch the real profile.
+            // Must happen before any engine or storage initializes.
+            if (IsBenchMode(args))
+            {
+                App.BeginBenchProfile(logPath);
+            }
+
             // 1) Set DLL search order so the runtime DLLs in the bin
             //    directory are found before anything else.
             SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
@@ -117,7 +127,7 @@ public static class Program
             // 4b) Real browser smoke test runs INSIDE the XAML loop below
             // (WebView2 controls require the UI thread + dispatcher).
             bool browserSmoke = Array.IndexOf(args, "--browser-smoke-test") >= 0;
-            bool runBench = Array.IndexOf(args, "--run-bench") >= 0;
+            bool runBench = IsBenchMode(args);
 
             // 5) Initialize services before XAML starts.
             App.Services = App.BuildServicesStatic();
@@ -186,24 +196,34 @@ public static class Program
                     Log(logPath, "Main window activated.");
 
                     // Start lifecycle scheduler (DispatcherQueueTimer) on the UI
-                    // thread so the timer can safely marshal back.
-                    try
+                    // thread so the timer can safely marshal back. Skipped
+                    // in benchmark mode: the bench drives lifecycle
+                    // explicitly and background automation would pollute
+                    // measurements.
+                    if (!runBench)
                     {
-                        var tqTimer = dq.CreateTimer();
-                        tqTimer.Interval = TimeSpan.FromSeconds(60);
-                        tqTimer.IsRepeating = true;
-                        var lifecycle = App.Services.GetRequiredService<TabLifecycleManager>();
-                        tqTimer.Tick += (s, e) =>
+                        try
                         {
-                            // Run async fire-and-forget; lifecycle is fault-tolerant.
-                            _ = lifecycle.TickAsync();
-                        };
-                        tqTimer.Start();
-                        Log(logPath, "Lifecycle DispatcherQueueTimer started.");
+                            var tqTimer = dq.CreateTimer();
+                            tqTimer.Interval = TimeSpan.FromSeconds(60);
+                            tqTimer.IsRepeating = true;
+                            var lifecycle = App.Services.GetRequiredService<TabLifecycleManager>();
+                            tqTimer.Tick += (s, e) =>
+                            {
+                                // Run async fire-and-forget; lifecycle is fault-tolerant.
+                                _ = lifecycle.TickAsync();
+                            };
+                            tqTimer.Start();
+                            Log(logPath, "Lifecycle DispatcherQueueTimer started.");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log(logPath, $"Lifecycle timer start failed: {ex.GetType().Name}: {ex.Message}");
+                        }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Log(logPath, $"Lifecycle timer start failed: {ex.GetType().Name}: {ex.Message}");
+                        Log(logPath, "Bench mode: lifecycle timer disabled.");
                     }
                     Log(logPath, "Startup complete.");
 
@@ -213,6 +233,13 @@ public static class Program
                     {
                         Log(logPath, "Bench mode: starting scenario run.");
                         var benchDq = dq;
+                        // Pin bench continuations to the UI thread (same
+                        // reason as the browser smoke test): TabService
+                        // mutations applied via OnUi are synchronous inline
+                        // only on the UI thread; on pool threads they post
+                        // and read-your-write races follow.
+                        SynchronizationContext.SetSynchronizationContext(
+                            new DispatcherQueueSynchronizationContext(benchDq));
                         _ = Services.BenchRunner.RunAsync(logPath, args).ContinueWith(t =>
                         {
                             s_headlessExitCode = t.IsCompletedSuccessfully ? t.Result : 1;
@@ -391,6 +418,14 @@ public static class Program
     }
 
     private static readonly object _logGate = new();
+
+    private static bool IsBenchMode(string[] args)
+    {
+        foreach (var a in args)
+            if (a == "--run-bench" || a.StartsWith("--run-bench=", StringComparison.Ordinal))
+                return true;
+        return false;
+    }
     private static void Log(string path, string line)
     {
         var stamp = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff} [{Environment.CurrentManagedThreadId}] {line}";

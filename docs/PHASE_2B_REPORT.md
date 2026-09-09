@@ -1,7 +1,10 @@
 # Phase 2B Report (HEAD-verified)
 
-Deployment: unpackaged, self-contained .NET, **WinAppSDK 1.7.250606001**,
-`WindowsPackageType=None`, `WindowsAppSDKSelfContained=true`.
+Deployment: unpackaged WinUI 3 desktop app, self-contained .NET
+(`SelfContained=true`), **framework-dependent WinAppSDK 1.7.250606001**
+(`WindowsAppSDKSelfContained=false`, explicit bootstrap via
+`Program.Main`), `WindowsPackageType=None`. See `docs/DEPLOYMENT.md`
+for the exact model (a unit test pins these properties).
 Machine: Windows 10.0.19045 x64/32. WebView2 runtime **152.0.4191.66**.
 
 ## Startup — launches
@@ -72,9 +75,17 @@ marshaled through `IUiDispatcher`; off-thread property reads use
 UI-thread-maintained caches. This fixed Warm in production, where
 lifecycle-timer continuations run on pool threads.
 
-Measured (scenario D, 10 local pages): 10 Live = 976 MB process
-tree → 1 Live / 9 Warm = **517 MB** (renderer bytes 536 → 95 MB,
-processes 16 → 7). Warm reclaims essentially as much as Ghost.
+Measured (scenario D, 10 local pages — CORRECTION, see below):
+initially reported as 10 Live = 976 MB process tree → 1 Live / 9 Warm
+= 517 MB.
+
+> **Phase 2C correction (kept for history, do not rely on the numbers
+> above): the 2B benchmark's settle step destroyed every view outside
+> the Live set, so those 9 "Warm" renderers were physically Ghost at
+> sampling time — the "Warm reclaims as much as Ghost" conclusion was
+> invalid. The corrected Warm-vs-Ghost truth is measured in
+> `docs/PHASE_2C_REPORT.md` with renderer-retention validation
+> (`ScenarioValid`, 10 views held for the Warm case).
 
 ## Ghost — real renderer removal, measured
 
@@ -121,7 +132,7 @@ stabilization per phase, `MemoryProbe` over host +
 | B: 5 logical / 5 Live | 152.02 MB | 90.91 MB | 131.96 MB | 293.13 MB | 62.29 MB | 52.54 MB | 691.93 MB | 11 | 5/0/0 | 5 |
 | C: 10 logical / 10 Live | 162.45 MB | 100.08 MB | 155.66 MB | 538.59 MB | 65.24 MB | 53.17 MB | 975.11 MB | 16 | 10/0/0 | 10 |
 | D-pre: 10 logical / 10 Live | 164.92 MB | 102.31 MB | 156.05 MB | 536.16 MB | 65.52 MB | 53.28 MB | 975.94 MB | 16 | 10/0/0 | 10 |
-| D: 10 logical / 1 Live / 9 Warm | 164.31 MB | 102.46 MB | 138.48 MB | 94.73 MB | 64.27 MB | 54.99 MB | 516.77 MB | 7 | 1/9/0 | 1 |
+| D: 10 logical / 1 Live / 9 Warm — INVALID, superseded (Views=1 proves the 9 Warm renderers were physically Ghost; see correction above and `docs/PHASE_2C_REPORT.md`) |
 | E-pre: 10 logical / 10 Live | 169.79 MB | 107.94 MB | 161.47 MB | 532.10 MB | 66.34 MB | 55.46 MB | 985.17 MB | 16 | 10/0/0 | 10 |
 | E: 10 logical / 1 Live / 9 Ghost | 170.20 MB | 108.43 MB | 139.84 MB | 93.41 MB | 64.68 MB | 55.13 MB | 523.26 MB | 7 | 1/0/9 | 1 |
 | F: 25 logical / 3 Live / 22 Ghost | 173.71 MB | 112.25 MB | 137.95 MB | 195.67 MB | 64.40 MB | 55.10 MB | 626.82 MB | 9 | 3/0/22 | 3 |

@@ -375,6 +375,8 @@ public class BrowserRuntime : IAsyncDisposable
         try
         {
             var ctx = await view.ExtractPageContextAsync(ct).ConfigureAwait(false);
+            _log.LogInformation("Ghost pre-save for tab {Id}: scroll=({X},{Y}) title='{Title}'",
+                tabId, ctx.ScrollX, ctx.ScrollY, ctx.Title);
             _ui.Post(() => _tabService.UpdatePageContext(tabId, ctx));
         }
         catch (Exception ex)
@@ -447,8 +449,7 @@ public class BrowserRuntime : IAsyncDisposable
             // Await the navigation-completion event so scroll restoration
             // lands on the loaded document instead of about:blank.
             var completed = await navigationWait.ConfigureAwait(false);
-            var navigation = navSw.Elapsed;
-            if (completed is null)
+            var navigation = navSw.Elapsed;            if (completed is null)
             {
                 await TeardownViewAsync(tab.Id).ConfigureAwait(false);
                 FailRestore(tab, sw, rendererReady, navigation, TimeSpan.Zero,
@@ -464,9 +465,15 @@ public class BrowserRuntime : IAsyncDisposable
                 return false;
             }
             var scrollSw = Stopwatch.StartNew();
+            _log.LogInformation("Restore scroll target for tab {Id}: ({X},{Y})",
+                tab.Id, tab.ScrollX, tab.ScrollY);
             try
             {
-                await view.SetScrollAsync(tab.ScrollX, tab.ScrollY, ct).ConfigureAwait(false);
+                // SetScroll right after NavigationCompleted can clamp to 0
+                // when layout isn't finished yet. Settle bounded: set,
+                // wait, read back, retry while far from target. Scroll is
+                // best-effort and NEVER fails the restore.
+                await SettleScrollAsync(view, tab.ScrollX, tab.ScrollY, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -487,6 +494,26 @@ public class BrowserRuntime : IAsyncDisposable
                 "exception: " + ex.GetType().Name + ": " + ex.Message);
             _log.LogError(ex, "Restore failed for tab {Id}", tab.Id);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort scroll restoration with layout settling. Never throws;
+    /// never affects the restore success verdict.
+    /// </summary>
+    private static async Task SettleScrollAsync(IBrowserView view, double x, double y, CancellationToken ct)
+    {
+        try { await view.SetScrollAsync(x, y, ct).ConfigureAwait(false); } catch { return; }
+        if (Math.Abs(x) < 1 && Math.Abs(y) < 1) return;
+        for (int i = 0; i < 3; i++)
+        {
+            try { await Task.Delay(400, ct).ConfigureAwait(false); }
+            catch { return; }
+            double ry;
+            try { (_, ry) = await view.GetScrollAsync(ct).ConfigureAwait(false); }
+            catch { return; }
+            if (Math.Abs(ry - y) <= 100) return;
+            try { await view.SetScrollAsync(x, y, ct).ConfigureAwait(false); } catch { return; }
         }
     }
 

@@ -45,11 +45,12 @@ internal sealed class SharedContext : IDisposable
         Runtime.CreateEngineForTests = _ => Task.FromResult<IBrowserEngine>(Engine);
     }
 
-    public TabRecord AddGhostTab(string url)
+    public TabRecord AddGhostTab(string url, double scrollX = 0, double scrollY = 0)
     {
         var tab = new TabRecord(Guid.NewGuid(), WorkspaceId, url, "T", null,
             TabRendererStateKind.Ghost, TabLogicalStateKind.Background,
-            false, false, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, null);
+            false, false, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, null,
+            ScrollX: scrollX, ScrollY: scrollY);
         Tabs.Tabs.Add(tab);
         Engine.AddView(new FakeView(tab.Id));
         return tab;
@@ -179,7 +180,12 @@ internal sealed class FakeView : IBrowserView
         if (ThrowOnScroll) throw new InvalidOperationException("scroll unavailable");
         return Task.FromResult((0.0, 42.0));
     }
-    public Task SetScrollAsync(double x, double y, CancellationToken ct = default) => Task.CompletedTask;
+    public Task SetScrollAsync(double x, double y, CancellationToken ct = default)
+    {
+        LastSetScroll = (x, y);
+        return Task.CompletedTask;
+    }
+    public (double X, double Y) LastSetScroll { get; private set; }
     public Task<bool> SuspendAsync(CancellationToken ct = default)
     {
         CallLog.Add("suspend");

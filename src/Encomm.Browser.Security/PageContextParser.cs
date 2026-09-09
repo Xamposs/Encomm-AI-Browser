@@ -16,10 +16,18 @@ public static class PageContextParser
         if (string.IsNullOrEmpty(jsonResult) || jsonResult == "null" || jsonResult == "undefined")
             return new PageContext(url, title, null, null, null, null);
 
-        string? inner;
+        string? inner = null;
         try
         {
             using var outer = System.Text.Json.JsonDocument.Parse(jsonResult);
+            // ExecuteScriptAsync may return the object directly (Object)
+            // or a JSON-encoded string (String), depending on whether the
+            // script returned a value or JSON.stringify output.
+            if (outer.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                using var owned = System.Text.Json.JsonDocument.Parse(outer.RootElement.GetRawText());
+                return BuildContext(owned.RootElement, url, title);
+            }
             if (outer.RootElement.ValueKind != System.Text.Json.JsonValueKind.String)
                 return new PageContext(url, title, null, null, null, null);
             inner = outer.RootElement.GetString();
@@ -31,23 +39,27 @@ public static class PageContextParser
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(inner);
-            var root = doc.RootElement;
-            var d = root.TryGetProperty("d", out var dv) ? dv.GetString() : null;
-            var sel = root.TryGetProperty("sel", out var sv) ? sv.GetString() : null;
-            var ex = root.TryGetProperty("ex", out var ev) ? ev.GetString() : null;
-            var x = root.TryGetProperty("x", out var xv) ? xv.GetDouble() : 0;
-            var y = root.TryGetProperty("y", out var yv) ? yv.GetDouble() : 0;
-            return new PageContext(url, title,
-                TextSanitizer.TrimExcerpt(d),
-                TextSanitizer.TrimSelection(sel),
-                TextSanitizer.TrimExcerpt(ex),
-                null,
-                x, y);
+            return BuildContext(doc.RootElement, url, title);
         }
         catch
         {
             return new PageContext(url, title, null, null, null, null);
         }
+    }
+
+    private static PageContext BuildContext(System.Text.Json.JsonElement root, string url, string title)
+    {
+        var d = root.TryGetProperty("d", out var dv) ? dv.GetString() : null;
+        var sel = root.TryGetProperty("sel", out var sv) ? sv.GetString() : null;
+        var ex = root.TryGetProperty("ex", out var ev) ? ev.GetString() : null;
+        var x = root.TryGetProperty("x", out var xv) && xv.TryGetDouble(out var xd) ? xd : 0;
+        var y = root.TryGetProperty("y", out var yv) && yv.TryGetDouble(out var yd) ? yd : 0;
+        return new PageContext(url, title,
+            TextSanitizer.TrimExcerpt(d),
+            TextSanitizer.TrimSelection(sel),
+            TextSanitizer.TrimExcerpt(ex),
+            null,
+            x, y);
     }
 
     /// <summary>
