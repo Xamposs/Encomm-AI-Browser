@@ -66,6 +66,40 @@ public class BrowserRuntime : IAsyncDisposable
     /// <summary>Last Ghost-restore total latency, for diagnostics.</summary>
     public TimeSpan LastRestoreLatency { get; private set; }
 
+    /// <summary>
+    /// Per-phase breakdown of the last Ghost restore: renderer creation +
+    /// WebView2 init (combined), navigation incl. completion wait, scroll
+    /// restoration, and the total. Creation and init are combined because
+    /// both happen inside the engine's CreateViewAsync.
+    /// </summary>
+    public RestoreBreakdown LastRestoreBreakdown { get; private set; } = new(
+        TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero);
+
+    /// <summary>
+    /// Human-readable reason for the last Ghost-restore failure, or null
+    /// when the last restore succeeded. Surfaced so the UI (and tests)
+    /// can distinguish timeout / cancellation / navigation failure.
+    /// The logical tab is left in Ghost on failure so a retry can run.
+    /// </summary>
+    public string? LastRestoreError { get; private set; }
+
+    /// <summary>
+    /// Navigation-completion watchdog for Ghost restore. 20 s by default;
+    /// tests may shorten it. Never zero/negative (falls back to 20 s).
+    /// </summary>
+    public TimeSpan RestoreWatchdog
+    {
+        get => _restoreWatchdog;
+        set => _restoreWatchdog = value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(20);
+    }
+    private TimeSpan _restoreWatchdog = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Test seam: when set, InitializeAsync uses this factory instead of
+    /// the real WebView2 engine factory. Production code never sets it.
+    /// </summary>
+    public Func<CancellationToken, Task<IBrowserEngine>>? CreateEngineForTests { get; set; }
+
     /// <summary>Last suspend / resume latency, for diagnostics.</summary>
     public TimeSpan LastSuspendLatency { get; private set; }
     public TimeSpan LastResumeLatency { get; private set; }
@@ -106,7 +140,10 @@ public class BrowserRuntime : IAsyncDisposable
         {
             if (_initTask is null)
             {
-                _initTask = _engineFactory.CreateAsync(this, ct);
+                var seam = CreateEngineForTests;
+                _initTask = seam is not null
+                    ? seam(ct)
+                    : _engineFactory.CreateAsync(this, ct);
             }
         }
         return _initTask;
@@ -268,6 +305,9 @@ public class BrowserRuntime : IAsyncDisposable
         lock (_viewsGate) _views.TryGetValue(tabId, out view);
         if (view is null) return false;
         var sw = Stopwatch.StartNew();
+        // Capture state BEFORE suspension: script execution after a
+        // successful TrySuspendAsync is unreliable. Scroll failure must
+        // not prevent suspension, so each capture step is isolated.
         try
         {
             var ctx = await view.ExtractPageContextAsync(ct).ConfigureAwait(false);
@@ -279,19 +319,19 @@ public class BrowserRuntime : IAsyncDisposable
         }
         try
         {
+            var (sx, sy) = await view.GetScrollAsync(ct).ConfigureAwait(false);
+            _ui.Post(() => _tabService.MutateScroll(tabId, sx, sy));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Suspend scroll save failed for tab {Id}", tabId);
+        }
+        try
+        {
             var ok = await view.SuspendAsync(ct).ConfigureAwait(false);
             LastSuspendLatency = sw.Elapsed;
             if (ok && view.State == ViewLifecycleState.Warm)
             {
-                try
-                {
-                    var (sx, sy) = await view.GetScrollAsync(ct).ConfigureAwait(false);
-                    _ui.Post(() => _tabService.MutateScroll(tabId, sx, sy));
-                }
-                catch (Exception ex)
-                {
-                    _log.LogDebug(ex, "Suspend scroll save failed for tab {Id}", tabId);
-                }
                 return true;
             }
             _log.LogWarning("Suspend for tab {Id} reported failure", tabId);
@@ -299,7 +339,7 @@ public class BrowserRuntime : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Suspend failed for tab {Id}", tabId);
+            _log.LogWarning(ex, "Suspend failed for tab {Id}: {Stack}", tabId, ex.ToString());
             return false;
         }
     }
@@ -318,7 +358,7 @@ public class BrowserRuntime : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Resume failed for tab {Id}", tabId);
+            _log.LogWarning(ex, "Resume failed for tab {Id}: {Stack}", tabId, ex.ToString());
             return false;
         }
     }
@@ -358,46 +398,72 @@ public class BrowserRuntime : IAsyncDisposable
     /// <summary>
     /// Restore a Ghosted tab to a fully Live, navigated state. Creates a
     /// fresh renderer, navigates to the persisted URL, awaits navigation
-    /// completion, then restores scroll. Returns true when the page is
-    /// usable (or when there is nothing to navigate, e.g. encomm://).
+    /// completion, then restores scroll.
+    ///
+    /// STRICT SUCCESS SEMANTICS: returns true (and marks Live) ONLY when
+    /// navigation actually reached a usable document. On timeout,
+    /// cancellation, navigation failure, or renderer-creation failure the
+    /// method tears down the partial view, leaves the logical tab in
+    /// Ghost with its URL intact (retryable), records
+    /// <see cref="LastRestoreError"/>, and returns false. It NEVER marks
+    /// Live, restores scroll, or reports success on a failed load.
     /// </summary>
     public async Task<bool> RestoreGhostTabAsync(TabRecord tab, CancellationToken ct = default)
     {
         if (tab is null) throw new ArgumentNullException(nameof(tab));
         var sw = Stopwatch.StartNew();
+        var createSw = Stopwatch.StartNew();
         try
         {
             var view = await GetOrCreateAsync(tab, ct).ConfigureAwait(false);
-            if (view is null) return false;
+            if (view is null)
+            {
+                FailRestore(tab, sw, createSw.Elapsed, TimeSpan.Zero, TimeSpan.Zero, "renderer creation returned null");
+                return false;
+            }
+            var rendererReady = createSw.Elapsed;
 
             if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase))
             {
                 _tabService.SetRendererState(tab, TabRendererStateKind.Live);
+                LastRestoreError = null;
                 LastRestoreLatency = sw.Elapsed;
+                LastRestoreBreakdown = new RestoreBreakdown(rendererReady, TimeSpan.Zero, TimeSpan.Zero, sw.Elapsed);
                 return true;
             }
             // Subscribe BEFORE navigating: a fast (cached/redirected) load
             // can complete before a post-navigate subscription attaches,
             // which previously produced false "did not complete" warnings.
             var navigationWait = AwaitNavigationAsync(view, ct);
+            var navSw = Stopwatch.StartNew();
             var result = await view.NavigateAsync(tab.Url, ct).ConfigureAwait(false);
             if (!result.Accepted)
             {
-                _log.LogWarning("Restore navigate failed for {Id}: {Reason}", tab.Id, result.Reason);
+                await TeardownViewAsync(tab.Id).ConfigureAwait(false);
+                FailRestore(tab, sw, rendererReady, navSw.Elapsed, TimeSpan.Zero,
+                    "navigation rejected: " + (result.Reason ?? "unknown"));
                 return false;
             }
             // Await the navigation-completion event so scroll restoration
             // lands on the loaded document instead of about:blank.
             var completed = await navigationWait.ConfigureAwait(false);
+            var navigation = navSw.Elapsed;
             if (completed is null)
             {
-                _log.LogWarning("Restore navigation did not complete for {Id} (watchdog/cancelled)", tab.Id);
+                await TeardownViewAsync(tab.Id).ConfigureAwait(false);
+                FailRestore(tab, sw, rendererReady, navigation, TimeSpan.Zero,
+                    ct.IsCancellationRequested ? "cancelled"
+                        : $"navigation watchdog timeout ({RestoreWatchdog.TotalSeconds:0}s)");
+                return false;
             }
-            else if (!completed.Success)
+            if (!completed.Success)
             {
-                _log.LogWarning("Restore navigation reported failure for {Id}: url={Url} error={Error}",
-                    tab.Id, completed.Url, completed.ErrorMessage);
+                await TeardownViewAsync(tab.Id).ConfigureAwait(false);
+                FailRestore(tab, sw, rendererReady, navigation, TimeSpan.Zero,
+                    $"navigation failed: url={completed.Url} error={completed.ErrorMessage}");
+                return false;
             }
+            var scrollSw = Stopwatch.StartNew();
             try
             {
                 await view.SetScrollAsync(tab.ScrollX, tab.ScrollY, ct).ConfigureAwait(false);
@@ -406,16 +472,49 @@ public class BrowserRuntime : IAsyncDisposable
             {
                 _log.LogDebug(ex, "Restore scroll failed for {Id}", tab.Id);
             }
+            var scroll = scrollSw.Elapsed;
             _tabService.SetRendererState(tab, TabRendererStateKind.Live);
+            LastRestoreError = null;
             LastRestoreLatency = sw.Elapsed;
+            LastRestoreBreakdown = new RestoreBreakdown(rendererReady, navigation, scroll, sw.Elapsed);
             _log.LogInformation("Tab {Id} restored in {Ms}ms", tab.Id, LastRestoreLatency.TotalMilliseconds);
             return true;
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Restore failed for tab {Id}: {Stack}", tab.Id, ex.ToString());
+            await TeardownViewAsync(tab.Id).ConfigureAwait(false);
+            FailRestore(tab, sw, createSw.Elapsed, TimeSpan.Zero, TimeSpan.Zero,
+                "exception: " + ex.GetType().Name + ": " + ex.Message);
+            _log.LogError(ex, "Restore failed for tab {Id}", tab.Id);
             return false;
         }
+    }
+
+    private void FailRestore(TabRecord tab, Stopwatch total, TimeSpan rendererReady,
+        TimeSpan navigation, TimeSpan scroll, string reason)
+    {
+        LastRestoreError = reason;
+        LastRestoreLatency = total.Elapsed;
+        LastRestoreBreakdown = new RestoreBreakdown(rendererReady, navigation, scroll, total.Elapsed);
+        _log.LogWarning("Ghost restore FAILED for {Id}: {Reason}", tab.Id, reason);
+    }
+
+    /// <summary>
+    /// Remove and dispose a renderer without touching logical tab state.
+    /// Used to tear down partial views after a failed restore so the
+    /// Ghost ⇒ no-renderer invariant holds and a retry starts clean.
+    /// </summary>
+    private async Task TeardownViewAsync(Guid tabId)
+    {
+        IBrowserView? view;
+        lock (_viewsGate)
+        {
+            if (!_views.TryGetValue(tabId, out view)) return;
+            _views.Remove(tabId);
+        }
+        if (view is null) return;
+        try { await view.GhostAsync().ConfigureAwait(false); } catch { }
+        try { await view.DisposeAsync().ConfigureAwait(false); } catch { }
     }
 
     /// <summary>
@@ -424,7 +523,7 @@ public class BrowserRuntime : IAsyncDisposable
     /// first. Callers must subscribe BEFORE starting navigation: fast
     /// loads can complete before a post-navigate subscription attaches.
     /// </summary>
-    private static Task<NavigationCompletedEventArgs?> AwaitNavigationAsync(IBrowserView view, CancellationToken ct)
+    private Task<NavigationCompletedEventArgs?> AwaitNavigationAsync(IBrowserView view, CancellationToken ct)
     {
         var tcs = new TaskCompletionSource<NavigationCompletedEventArgs?>(TaskCreationOptions.RunContinuationsAsynchronously);
         EventHandler<NavigationCompletedEventArgs>? handler = null;
@@ -447,7 +546,7 @@ public class BrowserRuntime : IAsyncDisposable
         });
         // Navigation watchdog: a page that never completes must not hang
         // restoration forever.
-        var watchdog = Task.Delay(TimeSpan.FromSeconds(20), ct).ContinueWith(_ =>
+        var watchdog = Task.Delay(RestoreWatchdog, ct).ContinueWith(_ =>
         {
             if (handler is not null) view.NavigationCompleted -= handler;
             tcs.TrySetResult(null);

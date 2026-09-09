@@ -67,6 +67,18 @@ public enum PermissionKind
 /// </summary>
 public sealed record NavigationResult(bool Accepted, string? Reason = null);
 
+/// <summary>
+/// Per-phase Ghost-restore cost breakdown. RendererReady covers renderer
+/// creation + WebView2 init (combined inside the engine); Navigation
+/// covers NavigateAsync through NavigationCompleted; Scroll covers
+/// scroll restoration; Total is Ghost-to-usable wall time.
+/// </summary>
+public sealed record RestoreBreakdown(
+    TimeSpan RendererReady,
+    TimeSpan Navigation,
+    TimeSpan Scroll,
+    TimeSpan Total);
+
 /// <summary>Lifecycle events surfaced from the engine.</summary>
 public interface IBrowserView : IAsyncDisposable
 {

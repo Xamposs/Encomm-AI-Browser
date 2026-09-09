@@ -184,8 +184,17 @@ public sealed class WebView2BrowserView : IBrowserView
 
     public Guid Id => _tabId;
     public ViewLifecycleState State => _state;
-    public string CurrentUrl => _control?.Source?.ToString() ?? _lastUrl;
-    public string CurrentTitle => _control?.CoreWebView2?.DocumentTitle ?? _lastTitle;
+    /// <summary>
+    /// Thread-safe reads: the XAML control has UI-thread affinity, so
+    /// off-thread callers get the last cached value (maintained on the
+    /// UI thread by navigation/title events).
+    /// </summary>
+    public string CurrentUrl => _ui.HasThreadAccess
+        ? (_control?.Source?.ToString() ?? _lastUrl)
+        : _lastUrl;
+    public string CurrentTitle => _ui.HasThreadAccess
+        ? (_control?.CoreWebView2?.DocumentTitle ?? _lastTitle)
+        : _lastTitle;
     public string? CurrentFaviconUrl { get; private set; }
     public bool CanGoBack => _control?.CanGoBack ?? false;
     public bool CanGoForward => _control?.CanGoForward ?? false;
@@ -528,19 +537,50 @@ public sealed class WebView2BrowserView : IBrowserView
     /// CoreWebView2.TrySuspendAsync. The control is hidden first because
     /// TrySuspendAsync requires the host to not be visible. On success
     /// transitions to Warm and returns true.
+    ///
+    /// Thread-safe: every touch of the XAML control / CoreWebView2 is
+    /// marshaled through the injected dispatcher, so lifecycle timers
+    /// and background callers may call from any thread.
     /// </summary>
     public async Task<bool> SuspendAsync(CancellationToken ct = default)
     {
         if (_disposed) return false;
         if (_state != ViewLifecycleState.Live) return false;
-        if (_control?.CoreWebView2 is null) return false;
-        // TrySuspendAsync requires the host to not be visible. All UI
-        // property access is marshaled through the injected dispatcher.
-        var prevVisibility = await _ui.RunAsync(() => Task.FromResult(_control.Visibility)).ConfigureAwait(false);
-        await _ui.RunAsync(() => { _control.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed; return Task.FromResult(true); }).ConfigureAwait(false);
+        // Every touch of the XAML control (including the null-guard on
+        // .CoreWebView2, which is itself a UI-thread-affine getter) must
+        // happen on the UI thread: callers include pool-thread lifecycle
+        // timers. Setup (guard + collapse) runs dispatched as one unit.
+        var prevVisibility = Microsoft.UI.Xaml.Visibility.Visible;
         try
         {
-            var ok = await _control.CoreWebView2.TrySuspendAsync();
+            var setup = await _ui.RunAsync(() =>
+            {
+                try
+                {
+                    if (_disposed || _control?.CoreWebView2 is null)
+                        return Task.FromResult((false, Microsoft.UI.Xaml.Visibility.Visible));
+                    var prev = _control.Visibility;
+                    _control.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                    return Task.FromResult((true, prev));
+                }
+                catch { return Task.FromResult((false, Microsoft.UI.Xaml.Visibility.Visible)); }
+            }).ConfigureAwait(false);
+            if (!setup.Item1) return false;
+            prevVisibility = setup.Item2;
+        }
+        catch { return false; }
+        bool ok;
+        try
+        {
+            ok = await _ui.RunAsync(async () =>
+            {
+                try
+                {
+                    if (_control?.CoreWebView2 is null) return false;
+                    return await _control.CoreWebView2.TrySuspendAsync();
+                }
+                catch { return false; }
+            }).ConfigureAwait(false);
             if (ok)
             {
                 _state = ViewLifecycleState.Warm;
@@ -563,21 +603,37 @@ public sealed class WebView2BrowserView : IBrowserView
 
     /// <summary>
     /// Resume a suspended renderer (Warm → Live). Restores control
-    /// visibility and calls CoreWebView2.Resume(). Returns true when the
-    /// renderer is Live afterwards.
+    /// visibility and calls CoreWebView2.Resume(). The host visibility is
+    /// READ BACK after the write: Live is set (and true returned) only
+    /// when the host actually reports Visible, so callers can trust
+    /// "returned true ⇒ visible + Live".
+    /// </summary>
+    /// Thread-safe like SuspendAsync: CoreWebView2.Resume() is
+    /// marshaled through the dispatcher.
     /// </summary>
     public async Task<bool> ResumeAsync(CancellationToken ct = default)
     {
         if (_disposed) return false;
         if (_state != ViewLifecycleState.Warm) return _state == ViewLifecycleState.Live;
-        if (_control?.CoreWebView2 is null) return false;
         try
         {
-            if (_control.CoreWebView2.IsSuspended)
+            var resumed = await _ui.RunAsync(() =>
             {
-                _control.CoreWebView2.Resume();
-            }
+                try
+                {
+                    if (_disposed || _control?.CoreWebView2 is null) return Task.FromResult(false);
+                    if (_control.CoreWebView2.IsSuspended)
+                    {
+                        _control.CoreWebView2.Resume();
+                    }
+                    return Task.FromResult(true);
+                }
+                catch { return Task.FromResult(false); }
+            }).ConfigureAwait(false);
+            if (!resumed) return false;
             await _ui.RunAsync(() => { _control.Visibility = Microsoft.UI.Xaml.Visibility.Visible; return Task.FromResult(true); }).ConfigureAwait(false);
+            var visible = await _ui.RunAsync(() => Task.FromResult(_control.Visibility)).ConfigureAwait(false);
+            if (visible != Microsoft.UI.Xaml.Visibility.Visible) return false;
             _state = ViewLifecycleState.Live;
             return true;
         }
@@ -594,11 +650,16 @@ public sealed class WebView2BrowserView : IBrowserView
     /// </summary>
     public async Task<bool> HasUnsavedFormStateAsync(CancellationToken ct = default)
     {
-        if (_control?.CoreWebView2 is null) return false;
         if (_state != ViewLifecycleState.Live && _state != ViewLifecycleState.Warm) return false;
-        try
+        // The control guard must run on the UI thread (callers include
+        // pool-thread lifecycle timers); the script itself runs through
+        // the agile CoreWebView2 object.
+        return await _ui.RunAsync(async () =>
         {
-            const string script = "(() => { try {"
+            try
+            {
+                if (_control?.CoreWebView2 is null) return false;
+                const string script = "(() => { try {"
                 + " const els = document.querySelectorAll('input,textarea,select');"
                 + " for (const el of els) {"
                 + "   if (el.type === 'password') continue;"
@@ -611,10 +672,11 @@ public sealed class WebView2BrowserView : IBrowserView
                 + " for (const el of edits) { if ((el.innerText ?? '').trim().length > 0) return true; }"
                 + " return false;"
                 + " } catch(e) { return false; } })();";
-            var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
-            return Security.PageContextParser.ParseBoolResult(result);
-        }
-        catch { return false; }
+                var result = await _control.CoreWebView2.ExecuteScriptAsync(script);
+                return Security.PageContextParser.ParseBoolResult(result);
+            }
+            catch { return false; }
+        }).ConfigureAwait(false);
     }
 
     /// <summary>

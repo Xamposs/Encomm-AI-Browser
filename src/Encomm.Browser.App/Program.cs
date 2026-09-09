@@ -20,9 +20,19 @@ namespace Encomm.Browser.App;
 /// resolved before XAML activation.
 ///
 /// Supported command-line options:
-///   --smoke-test     create one tab, navigate the local about:blank,
-///                    verify the WebView2 environment initializes, exit
-///                    with 0 on success or non-zero on failure.
+///   --smoke-test           alias for --runtime-smoke-test (cheap,
+///                          headless: runtime + bootstrap + storage).
+///   --runtime-smoke-test   cheap diagnostic, no XAML: WebView2 runtime
+///                          detection, data-folder write, SQLite
+///                          round-trip. Exits 0/non-zero.
+///   --browser-smoke-test   REAL browser test inside the XAML loop: init
+///                          dispatcher + BrowserRuntime, create a real
+///                          renderer, navigate a deterministic local page,
+///                          await NavigationCompleted, verify title,
+///                          dispose. Exits 0/non-zero.
+///   --run-bench            in-app renderer memory benchmark (scenarios
+///                          A-H + restore cost), writes
+///                          artifacts/benchmark-results.{json,md}, exits.
 /// </summary>
 public static class Program
 {
@@ -97,11 +107,17 @@ public static class Program
                 return 0xB001;
             }
 
-            // 4) Smoke-test mode bypasses XAML; exits 0/non-zero.
-            if (Array.IndexOf(args, "--smoke-test") >= 0)
+            // 4) Headless runtime smoke test bypasses XAML; exits 0/non-zero.
+            if (Array.IndexOf(args, "--smoke-test") >= 0
+                || Array.IndexOf(args, "--runtime-smoke-test") >= 0)
             {
-                return RunSmokeTest(logPath);
+                return RunRuntimeSmokeTest(logPath);
             }
+
+            // 4b) Real browser smoke test runs INSIDE the XAML loop below
+            // (WebView2 controls require the UI thread + dispatcher).
+            bool browserSmoke = Array.IndexOf(args, "--browser-smoke-test") >= 0;
+            bool runBench = Array.IndexOf(args, "--run-bench") >= 0;
 
             // 5) Initialize services before XAML starts.
             App.Services = App.BuildServicesStatic();
@@ -144,6 +160,25 @@ public static class Program
                     var app = new App();
                     Log(logPath, "App instance created.");
 
+                    // Headless browser smoke test: real renderer, no window.
+                    if (browserSmoke)
+                    {
+                        Log(logPath, "Browser smoke test starting (no MainWindow).");
+                        var smokeDq = dq;
+                        _ = RunBrowserSmokeTestAsync(logPath, smokeDq).ContinueWith(t =>
+                        {
+                            if (t.IsFaulted)
+                            {
+                                Log(logPath, "Browser smoke test FAULT: " + t.Exception?.GetBaseException().Message);
+                                s_headlessExitCode = 1;
+                            }
+                            // Application.Exit requires the UI thread.
+                            try { smokeDq.TryEnqueue(() => { try { app.Exit(); } catch { s_headlessExitCode = 1; } }); }
+                            catch { s_headlessExitCode = 1; }
+                        }, TaskScheduler.Default);
+                        return;
+                    }
+
                     Log(logPath, "Constructing MainWindow.");
                     var window = new MainWindow();
                     Log(logPath, "MainWindow constructed; calling Activate.");
@@ -171,6 +206,22 @@ public static class Program
                         Log(logPath, $"Lifecycle timer start failed: {ex.GetType().Name}: {ex.Message}");
                     }
                     Log(logPath, "Startup complete.");
+
+                    // In-app renderer benchmark: runs scenarios against the
+                    // live window, writes artifacts, then exits.
+                    if (runBench)
+                    {
+                        Log(logPath, "Bench mode: starting scenario run.");
+                        var benchDq = dq;
+                        _ = Services.BenchRunner.RunAsync(logPath, args).ContinueWith(t =>
+                        {
+                            s_headlessExitCode = t.IsCompletedSuccessfully ? t.Result : 1;
+                            if (t.IsFaulted)
+                                Log(logPath, "Bench FAULT: " + t.Exception?.GetBaseException().Message);
+                            try { benchDq.TryEnqueue(() => { try { app.Exit(); } catch { s_headlessExitCode = 1; } }); }
+                            catch { s_headlessExitCode = 1; }
+                        }, TaskScheduler.Default);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -179,6 +230,8 @@ public static class Program
                     exitCode = 0xDEAD;
                 }
             });
+            // Headless modes (browser smoke / bench) report their own code.
+            if (browserSmoke || runBench) return s_headlessExitCode;
             return exitCode;
         }
         catch (Exception ex)
@@ -217,26 +270,123 @@ public static class Program
     }
 
     /// <summary>
-    /// Headless smoke test. Returns 0 on success, non-zero on failure.
+    /// Cheap headless smoke test: WebView2 runtime discovery, data-folder
+    /// write, and a SQLite round-trip. No XAML, no renderer.
+    /// Returns 0 on success, non-zero on failure.
     /// </summary>
-    private static int RunSmokeTest(string logPath)
+    private static int RunRuntimeSmokeTest(string logPath)
     {
         try
         {
-            Log(logPath, "Smoke test: probing WebView2 runtime.");
+            Log(logPath, "Runtime smoke test: probing WebView2 runtime.");
             var version = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
-            Log(logPath, $"Smoke test: WebView2 runtime version: {version}");
-            // We do not initialize a CoreWebView2Environment here because that
-            // would create a user-data folder on disk. The test verifies that
-            // the runtime DLL is loadable and reports a version, which is a
-            // strong signal that the rest of the application will work.
-            Log(logPath, "Smoke test: PASS");
+            if (string.IsNullOrWhiteSpace(version)) throw new InvalidOperationException("Empty WebView2 version.");
+            Log(logPath, $"Runtime smoke test: WebView2 runtime version: {version}");
+
+            var paths = BrowserPaths.Default();
+            Directory.CreateDirectory(paths.LogsDirectory);
+            var probeFile = Path.Combine(paths.LogsDirectory, "smoke-write.tmp");
+            File.WriteAllText(probeFile, "smoke");
+            File.Delete(probeFile);
+            Log(logPath, "Runtime smoke test: data-folder write OK.");
+
+            var tmpDb = Path.Combine(Path.GetTempPath(), "encomm-smoke-" + Guid.NewGuid().ToString("N") + ".db");
+            try
+            {
+                using var store = new Core.SqliteStore(tmpDb);
+                store.OpenConnection().Close();
+            }
+            finally
+            {
+                try { File.Delete(tmpDb); } catch { }
+            }
+            Log(logPath, "Runtime smoke test: SQLite round-trip OK.");
+            Log(logPath, "Runtime smoke test: PASS");
             return 0;
         }
         catch (Exception ex)
         {
-            Log(logPath, $"Smoke test: FAIL: {ex.GetType().Name}: {ex.Message}");
+            Log(logPath, $"Runtime smoke test: FAIL: {ex.GetType().Name}: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static int s_headlessExitCode;
+
+    /// <summary>
+    /// REAL browser smoke test. Runs on the XAML UI thread (Application
+    /// callback): initializes the dispatcher-aware services, creates a
+    /// real renderer via BrowserRuntime, navigates a deterministic local
+    /// page, awaits NavigationCompleted, verifies the title, disposes.
+    /// Returns 0 on success, non-zero on failure. Never throws.
+    /// </summary>
+    private static async Task<int> RunBrowserSmokeTestAsync(string logPath, DispatcherQueue dq)
+    {
+        const string marker = "EncommSmoke-7F3A9";
+        // Pin continuations to the XAML UI thread: the callback that
+        // launched us returns immediately, and App construction may have
+        // replaced the ambient sync context. Every adapter call below
+        // requires UI-thread affinity.
+        SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(dq));
+        var tmpHtml = Path.Combine(Path.GetTempPath(), "encomm-smoke-" + Guid.NewGuid().ToString("N") + ".html");
+        try
+        {
+            Log(logPath, "Browser smoke test: building services.");
+            if (App.Services is null) App.Services = App.BuildServicesStatic();
+
+            var runtime = App.Services.GetRequiredService<BrowserRuntime>();
+            var tab = new Core.Storage.TabRecord(Guid.NewGuid(), Guid.NewGuid(),
+                "about:blank", "smoke", null,
+                Core.Storage.TabRendererStateKind.Ghost, Core.Storage.TabLogicalStateKind.Background,
+                false, false, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, null);
+
+            Log(logPath, "Browser smoke test: creating renderer.");
+            var view = await runtime.GetOrCreateAsync(tab);
+            if (view is null) throw new InvalidOperationException("GetOrCreateAsync returned null.");
+
+            File.WriteAllText(tmpHtml,
+                "<html><head><title>" + marker + "</title></head><body>smoke</body></html>");
+            var url = new Uri(tmpHtml).AbsoluteUri;
+
+            var tcs = new TaskCompletionSource<Engine.Abstractions.NavigationCompletedEventArgs?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            void Handler(object? s, Engine.Abstractions.NavigationCompletedEventArgs e)
+            {
+                if (e.Url is not null && e.Url.Contains("about:blank", StringComparison.OrdinalIgnoreCase)) return;
+                view.NavigationCompleted -= Handler;
+                tcs.TrySetResult(e);
+            }
+            view.NavigationCompleted += Handler;
+            Log(logPath, "Browser smoke test: navigating to " + url);
+            var nav = await view.NavigateAsync(url);
+            if (!nav.Accepted) throw new InvalidOperationException("Navigate rejected: " + nav.Reason);
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+            view.NavigationCompleted -= Handler;
+            if (!ReferenceEquals(completed, tcs.Task) || tcs.Task.Result is not { Success: true })
+                throw new InvalidOperationException("NavigationCompleted missing or failed.");
+
+            var title = view.CurrentTitle ?? "";
+            Log(logPath, "Browser smoke test: title=" + title);
+            if (!title.Contains(marker, StringComparison.Ordinal))
+            {
+                var ctx = await view.ExtractPageContextAsync();
+                if (ctx.Title is null || !ctx.Title.Contains(marker, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Title mismatch: " + ctx.Title);
+            }
+            await runtime.GhostAsync(tab.Id);
+            Log(logPath, "Browser smoke test: PASS");
+            s_headlessExitCode = 0;
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log(logPath, $"Browser smoke test: FAIL: {ex.GetType().Name}: {ex.Message}");
+            s_headlessExitCode = 1;
+            return 1;
+        }
+        finally
+        {
+            try { File.Delete(tmpHtml); } catch { }
         }
     }
 
