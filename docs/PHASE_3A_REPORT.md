@@ -96,11 +96,12 @@ hint/accessible-name rules, workspace initials),
 
 ## Live verification
 
-Dark + Light + System-path themes; new tab; real webpage;
-5+ tabs; workspace flyout; Ghost restore + Warm resume via new UI
-(menu Sleep → Warm in DB → Ctrl+Tab → Live, titles intact);
-Shield/AI/Settings/dev-mode/memory-panel via UIA; keyboard
-shortcuts; narrow window; benchmark regression.
+Dark + Light + System themes (System follows the OS; New Tab
+ambient is theme-aware); new tab; real webpage; 5+ tabs; workspace
+flyout; Ghost restore + Warm resume via new UI (menu Sleep → Warm
+in DB → Ctrl+Tab → Live, titles intact); Shield/AI/Settings/dev-
+mode/memory-panel via UIA; keyboard shortcuts; narrow 1000×700
+window; benchmark regression.
 
 ## Known issues (no hiding)
 

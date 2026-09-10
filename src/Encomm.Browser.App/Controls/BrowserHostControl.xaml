@@ -15,7 +15,7 @@
                     <EntranceThemeTransition FromVerticalOffset="24" />
                 </TransitionCollection>
             </Grid.Transitions>
-            <ScrollViewer VerticalScrollMode="Auto">
+            <ScrollViewer VerticalScrollMode="Auto" HorizontalContentAlignment="Center">
                 <StackPanel Spacing="10" MaxWidth="560" Padding="0,72,0,32"
                             HorizontalAlignment="Center" VerticalAlignment="Center">
                     <Grid Height="120" Margin="0,0,0,4">

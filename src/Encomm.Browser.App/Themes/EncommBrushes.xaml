@@ -49,10 +49,30 @@
     </LinearGradientBrush>
 
     <!-- New Tab ambient light behind the logo: radial blue/purple at
-         ~12% opacity over near-black. Restrained by design. -->
-    <RadialGradientBrush x:Key="EncommAmbientBrush" Center="0.5,0.42" RadiusX="0.55" RadiusY="0.45" MappingMode="RelativeToBoundingBox">
-        <GradientStop Color="#1F2B4D" Offset="0.0" />
-        <GradientStop Color="#141126" Offset="0.55" />
-        <GradientStop Color="#080A10" Offset="1.0" />
-    </RadialGradientBrush>
+         ~12% opacity over the theme background. Restrained by design.
+         Theme-specific stops (a single gradient cannot adapt). -->
+    <!-- (defined in ThemeDictionaries below) -->
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <RadialGradientBrush x:Key="EncommAmbientBrush" Center="0.5,0.42" RadiusX="0.55" RadiusY="0.45">
+                <GradientStop Color="#1F2B4D" Offset="0.0" />
+                <GradientStop Color="#141126" Offset="0.55" />
+                <GradientStop Color="#080A10" Offset="1.0" />
+            </RadialGradientBrush>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+            <RadialGradientBrush x:Key="EncommAmbientBrush" Center="0.5,0.42" RadiusX="0.55" RadiusY="0.45">
+                <GradientStop Color="#1F2B4D" Offset="0.0" />
+                <GradientStop Color="#141126" Offset="0.55" />
+                <GradientStop Color="#080A10" Offset="1.0" />
+            </RadialGradientBrush>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <RadialGradientBrush x:Key="EncommAmbientBrush" Center="0.5,0.42" RadiusX="0.55" RadiusY="0.45">
+                <GradientStop Color="#D8E4FA" Offset="0.0" />
+                <GradientStop Color="#E9EDF5" Offset="0.55" />
+                <GradientStop Color="#F2F4F8" Offset="1.0" />
+            </RadialGradientBrush>
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
 </ResourceDictionary>
