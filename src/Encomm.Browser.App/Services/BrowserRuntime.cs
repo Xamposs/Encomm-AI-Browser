@@ -417,6 +417,17 @@ public class BrowserRuntime : IAsyncDisposable
         var createSw = Stopwatch.StartNew();
         try
         {
+            // Native surfaces never allocate a renderer (item 28): decide
+            // BEFORE GetOrCreateAsync, which would otherwise create (and
+            // leak) a WebView for encomm:// tabs.
+            if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase))
+            {
+                _tabService.SetRendererState(tab, TabRendererStateKind.Live);
+                LastRestoreError = null;
+                LastRestoreLatency = sw.Elapsed;
+                LastRestoreBreakdown = new RestoreBreakdown(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, sw.Elapsed);
+                return true;
+            }
             var view = await GetOrCreateAsync(tab, ct).ConfigureAwait(false);
             if (view is null)
             {
@@ -424,15 +435,6 @@ public class BrowserRuntime : IAsyncDisposable
                 return false;
             }
             var rendererReady = createSw.Elapsed;
-
-            if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase))
-            {
-                _tabService.SetRendererState(tab, TabRendererStateKind.Live);
-                LastRestoreError = null;
-                LastRestoreLatency = sw.Elapsed;
-                LastRestoreBreakdown = new RestoreBreakdown(rendererReady, TimeSpan.Zero, TimeSpan.Zero, sw.Elapsed);
-                return true;
-            }
             // Subscribe BEFORE navigating: a fast (cached/redirected) load
             // can complete before a post-navigate subscription attaches,
             // which previously produced false "did not complete" warnings.

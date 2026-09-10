@@ -6,12 +6,72 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <Grid x:Name="RootGrid">
-        <TextBlock x:Name="StatusOverlay"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Bottom"
-                   Margin="0,0,0,12"
-                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                   Visibility="Collapsed" />
+    <Grid x:Name="RootGrid" Background="{ThemeResource EncommBackgroundBrush}">
+        <!-- Native New Tab surface: no WebView, no renderer. -->
+        <Grid x:Name="NewTabPanel" Visibility="Collapsed"
+              Background="{ThemeResource EncommAmbientBrush}">
+            <Grid.Transitions>
+                <TransitionCollection>
+                    <EntranceThemeTransition FromVerticalOffset="24" />
+                </TransitionCollection>
+            </Grid.Transitions>
+            <ScrollViewer VerticalScrollMode="Auto">
+                <StackPanel Spacing="10" MaxWidth="560" Padding="0,72,0,32"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid Height="120" Margin="0,0,0,4">
+                        <TextBlock Text="ENCOMM" FontFamily="Segoe UI Variable Display"
+                                   FontSize="44" FontWeight="Bold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource EncommTextPrimaryBrush}" />
+                        <Image x:Name="NewTabLogo" Stretch="Uniform" MaxWidth="380"
+                               Source="ms-appx:///Assets/Brand/encomm-logo.png"
+                               ImageFailed="OnLogoFailed" />
+                    </Grid>
+                    <TextBox x:Name="NewTabBox" PlaceholderText="Search or enter an address"
+                             Height="44" CornerRadius="22" FontSize="14"
+                             Padding="18,0" KeyDown="OnNewTabKeyDown"
+                             Background="{ThemeResource EncommOmniboxBrush}"
+                             BorderBrush="{ThemeResource EncommBorderBrush}" BorderThickness="1"
+                             Foreground="{ThemeResource EncommTextPrimaryBrush}"
+                             AutomationProperties.Name="Search or enter an address" />
+                    <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                        <Button Content="Search" Style="{ThemeResource EncommNewTabAction}"
+                                Click="OnNewTabSearch" AutomationProperties.Name="Search" />
+                        <Button Click="OnNewTabAsk">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource EncommNewTabAction}">
+                                    <Setter Property="Foreground" Value="{ThemeResource EncommAccentCyanBrush}" />
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="&#x2726;" FontSize="14" VerticalAlignment="Center" />
+                                <TextBlock Text="Ask ENCOMM" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Text="Recent Workspaces" Style="{ThemeResource EncommQuietText}"
+                               HorizontalAlignment="Center" Margin="0,18,0,0" />
+                    <ListView x:Name="WorkspaceList" MaxHeight="180"
+                              SelectionChanged="OnWorkspaceSelected"
+                              AutomationProperties.Name="Recent workspaces">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" Padding="12,6"
+                                           Foreground="{ThemeResource EncommTextSecondaryBrush}" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+        <!-- Transient loading / error overlay (compact toast). -->
+        <Border x:Name="StatusToast" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,16" CornerRadius="8" Padding="14,8" MaxWidth="520"
+                Background="{ThemeResource EncommElevatedBrush}"
+                BorderBrush="{ThemeResource EncommBorderBrush}" BorderThickness="1"
+                Visibility="Collapsed">
+            <TextBlock x:Name="StatusOverlay" TextWrapping="Wrap"
+                       Foreground="{ThemeResource EncommTextSecondaryBrush}" FontSize="12" />
+        </Border>
     </Grid>
 </UserControl>

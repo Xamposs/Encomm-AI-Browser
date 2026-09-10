@@ -27,7 +27,7 @@ public sealed class BrowserSettings
     public bool ShieldSafeBuiltInOnly { get; set; } = true;
     public bool RestoreLastSession { get; set; } = true;
     public bool DeveloperDiagnostics { get; set; } = false;
-    public string Theme { get; set; } = "System";           // System | Light | Dark
+    public string Theme { get; set; } = "Dark";              // System | Light | Dark (Dark is the flagship default)
     public AIProviderSettings AI { get; set; } = new();
 }
 

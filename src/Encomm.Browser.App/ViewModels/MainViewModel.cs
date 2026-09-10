@@ -59,7 +59,7 @@ public sealed partial class MainViewModel : ObservableObject
         ActiveTab = tabs.ActiveTab;
         Mode = _settingsService.Current.Mode;
         ShowDeveloperSurfaces = Mode == "Developer";
-        AddressBarText = ActiveTab?.Url ?? "";
+        AddressBarText = DisplayUrl(ActiveTab);
 
         _workspaces.ActiveWorkspaceChanged += (_, _) =>
         {
@@ -68,14 +68,14 @@ public sealed partial class MainViewModel : ObservableObject
             _ = _runtime.GhostAllAsync();
             _tabs.LoadForWorkspace(ActiveWorkspace!.Id);
             ActiveTab = _tabs.ActiveTab;
-            AddressBarText = ActiveTab?.Url ?? "";
+            AddressBarText = DisplayUrl(ActiveTab);
         };
 
-        _tabs.TabOpened += (_, _) => { ActiveTab = _tabs.ActiveTab; AddressBarText = ActiveTab?.Url ?? ""; };
+        _tabs.TabOpened += (_, _) => { ActiveTab = _tabs.ActiveTab; AddressBarText = DisplayUrl(ActiveTab); };
         _tabs.ActiveTabChanged += (_, t) =>
         {
             ActiveTab = t;
-            AddressBarText = t?.Url ?? "";
+            AddressBarText = DisplayUrl(t);
             Title = string.IsNullOrEmpty(t?.Title) ? "Encomm AI Browser" : t!.Title;
         };
 
@@ -135,26 +135,32 @@ public sealed partial class MainViewModel : ObservableObject
     public async Task CloseTabAsync(TabRecord tab)
     {
         if (tab is null) return;
-        try
+        // Never materialize a renderer just to close: a tab without a
+        // view has no page state worth extracting (item 28: 10 blank
+        // new tabs must not mean 10 WebView2 renderers).
+        if (_runtime.HasView(tab.Id))
         {
-            var view = await _runtime.GetOrCreateAsync(tab);
-            if (view is not null)
+            try
             {
-                try
+                var view = await _runtime.GetOrCreateAsync(tab);
+                if (view is not null)
                 {
-                    var ctx = await view.ExtractPageContextAsync();
-                    _tabs.UpdatePageContext(tab.Id, ctx);
+                    try
+                    {
+                        var ctx = await view.ExtractPageContextAsync();
+                        _tabs.UpdatePageContext(tab.Id, ctx);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogDebug(ex, "Close pre-save failed for tab {Id}", tab.Id);
+                    }
+                    await _runtime.GhostAsync(tab.Id);
                 }
-                catch (Exception ex)
-                {
-                    _log.LogDebug(ex, "Close pre-save failed for tab {Id}", tab.Id);
-                }
-                await _runtime.GhostAsync(tab.Id);
             }
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Close renderer teardown failed for tab {Id}", tab.Id);
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Close renderer teardown failed for tab {Id}", tab.Id);
+            }
         }
         _tabs.Close(tab);
         var nextActive = _tabs.ActiveTab;
@@ -273,11 +279,45 @@ public sealed partial class MainViewModel : ObservableObject
         await SelectTabAsync(prev);
     }
 
+    /// <summary>What the omnibox shows: empty for native surfaces
+    /// (the New Tab page has its own search box).</summary>
+    private static string DisplayUrl(TabRecord? tab)
+    {
+        var url = tab?.Url ?? "";
+        return url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase) ? "" : url;
+    }
+
+    /// <summary>
+    /// Startup entry: load the active workspace's persisted tabs and
+    /// guarantee the user never faces an empty void — open a native new
+    /// tab when the workspace has none. Renderer allocation still
+    /// happens only on selection/navigation.
+    /// </summary>
+    public void EnsureStarted()
+    {
+        try
+        {
+            if (Tabs.Count == 0 && ActiveWorkspace is not null)
+            {
+                _tabs.LoadForWorkspace(ActiveWorkspace.Id);
+                ActiveTab = _tabs.ActiveTab;
+                AddressBarText = DisplayUrl(ActiveTab);
+            }
+            if (Tabs.Count == 0)
+            {
+                _ = NewTabAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "EnsureStarted failed");
+        }
+    }
+
     [RelayCommand]
     public void SwitchWorkspace(WorkspaceRecord workspace)
     {
-        if (workspace is null) return;
-        _workspaces.SwitchTo(workspace.Id);
+        if (workspace is null) return;        _workspaces.SwitchTo(workspace.Id);
         SelectedWorkspaceName = workspace.Name;
     }
 

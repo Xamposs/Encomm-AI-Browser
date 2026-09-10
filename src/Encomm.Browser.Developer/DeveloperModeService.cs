@@ -81,7 +81,12 @@ public sealed class StateDivergenceInspector
             }
 
             var hasRenderer = byId.TryGetValue(tab.Id, out var view);
-            if (tab.RendererState == TabRendererStateKind.Live && !hasRenderer)
+            // Native surfaces (encomm://) are Live by design with NO
+            // renderer — the native XAML panel presents them. Only web
+            // tabs require a renderer instance when Live.
+            var needsRenderer = !string.IsNullOrEmpty(tab.Url)
+                && !tab.Url.StartsWith("encomm://", StringComparison.OrdinalIgnoreCase);
+            if (tab.RendererState == TabRendererStateKind.Live && !hasRenderer && needsRenderer)
             {
                 report.Errors.Add(
                     $"Tab {tab.Id} ({ShortLabel(tab)}): logical=Live but no actual renderer instance.");
