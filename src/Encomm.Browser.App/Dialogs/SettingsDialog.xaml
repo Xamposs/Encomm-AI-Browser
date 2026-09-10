@@ -8,41 +8,54 @@
     CloseButtonText="Close"
     DefaultButton="Primary"
     PrimaryButtonClick="OnSave">
-    <ScrollViewer MaxHeight="600">
-        <StackPanel Spacing="12" Width="520">
-            <TextBlock Text="Mode" FontWeight="SemiBold" />
-            <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch">
-                <x:String>Everyday</x:String>
-                <x:String>Developer</x:String>
-            </ComboBox>
+    <NavigationView x:Name="Nav" PaneDisplayMode="Left" IsSettingsVisible="False"
+                    IsBackButtonVisible="Collapsed" SelectionChanged="OnCategoryChanged"
+                    OpenPaneLength="190" Width="760" Height="560">
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="General" Tag="GeneralSection" />
+            <NavigationViewItem Content="Appearance" Tag="AppearanceSection" />
+            <NavigationViewItem Content="Privacy &amp; Shield" Tag="PrivacySection" />
+            <NavigationViewItem Content="Performance" Tag="PerformanceSection" />
+            <NavigationViewItem Content="ENCOMM AI" Tag="AiSection" />
+            <NavigationViewItem Content="Developer" Tag="DeveloperSection" />
+        </NavigationView.MenuItems>
+        <ScrollViewer x:Name="Scroller" HorizontalScrollMode="Auto">
+            <StackPanel Spacing="8" Padding="12,4,12,16" Width="520">
+                <TextBlock x:Name="GeneralSection" Text="General" Style="{ThemeResource EncommDialogHeading}" />
+                <TextBlock Text="Experience" Style="{ThemeResource EncommChromeText}" />
+                <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch">
+                    <x:String>Everyday</x:String>
+                    <x:String>Developer</x:String>
+                </ComboBox>
+                <TextBlock Text="Search provider URL" Style="{ThemeResource EncommChromeText}" />
+                <TextBox x:Name="SearchUrlBox" />
+                <TextBlock Text="Restore last session on launch" Style="{ThemeResource EncommChromeText}" />
+                <ToggleSwitch x:Name="RestoreSession" OnContent="Yes" OffContent="No" />
 
-            <TextBlock Text="Search provider URL" FontWeight="SemiBold" />
-            <TextBox x:Name="SearchUrlBox" />
+                <TextBlock x:Name="AppearanceSection" Text="Appearance" Style="{ThemeResource EncommDialogHeading}" Margin="0,12,0,0" />
+                <TextBlock Text="Theme (applies immediately on save)" Style="{ThemeResource EncommChromeText}" />
+                <ComboBox x:Name="ThemeBox" HorizontalAlignment="Stretch">
+                    <x:String>System</x:String>
+                    <x:String>Light</x:String>
+                    <x:String>Dark</x:String>
+                </ComboBox>
 
-            <TextBlock Text="Theme" FontWeight="SemiBold" />
-            <ComboBox x:Name="ThemeBox" HorizontalAlignment="Stretch">
-                <x:String>System</x:String>
-                <x:String>Light</x:String>
-                <x:String>Dark</x:String>
-            </ComboBox>
+                <TextBlock x:Name="PrivacySection" Text="Privacy &amp; Shield" Style="{ThemeResource EncommDialogHeading}" Margin="0,12,0,0" />
+                <TextBlock Text="Block trackers and ad requests before they load." Style="{ThemeResource EncommQuietText}" TextWrapping="Wrap" />
+                <ToggleSwitch x:Name="Shield" OnContent="Protection enabled" OffContent="Protection off" />
 
-            <TextBlock Text="Memory saver" FontWeight="SemiBold" />
-            <ToggleSwitch x:Name="MemorySaver" OnContent="Enabled" OffContent="Disabled" />
-            <ComboBox x:Name="PresetBox" HorizontalAlignment="Stretch">
-                <x:String>Balanced</x:String>
-                <x:String>Aggressive</x:String>
-                <x:String>Adaptive</x:String>
-                <x:String>NeverSleep</x:String>
-            </ComboBox>
+                <TextBlock x:Name="PerformanceSection" Text="Performance" Style="{ThemeResource EncommDialogHeading}" Margin="0,12,0,0" />
+                <TextBlock Text="Memory saver suspends background tabs; Ghost removes their renderers entirely." Style="{ThemeResource EncommQuietText}" TextWrapping="Wrap" />
+                <ToggleSwitch x:Name="MemorySaver" OnContent="Memory saver on" OffContent="Memory saver off" />
+                <ComboBox x:Name="PresetBox" HorizontalAlignment="Stretch">
+                    <x:String>Balanced</x:String>
+                    <x:String>Aggressive</x:String>
+                    <x:String>Adaptive</x:String>
+                    <x:String>NeverSleep</x:String>
+                </ComboBox>
 
-            <TextBlock Text="Shield" FontWeight="SemiBold" />
-            <ToggleSwitch x:Name="Shield" OnContent="Enabled" OffContent="Disabled" />
-
-            <TextBlock Text="Restore last session on launch" FontWeight="SemiBold" />
-            <ToggleSwitch x:Name="RestoreSession" OnContent="Yes" OffContent="No" />
-
-            <TextBlock Text="AI provider" FontWeight="SemiBold" />
-            <StackPanel Spacing="6">
+                <TextBlock x:Name="AiSection" Text="ENCOMM AI" Style="{ThemeResource EncommDialogHeading}" Margin="0,12,0,0" />
+                <TextBlock Text="Optional assistant provider. Credentials stay encrypted on this device." Style="{ThemeResource EncommQuietText}" TextWrapping="Wrap" />
                 <ComboBox x:Name="ProviderBox" HorizontalAlignment="Stretch">
                     <x:String>mock</x:String>
                     <x:String>openai-compatible</x:String>
@@ -56,9 +69,11 @@
                     <Button Content="Test connection" Click="OnTestConnection" />
                     <TextBlock x:Name="TestResult" VerticalAlignment="Center" />
                 </StackPanel>
-            </StackPanel>
 
-            <TextBlock x:Name="Status" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
-        </StackPanel>
-    </ScrollViewer>
+                <TextBlock x:Name="DeveloperSection" Text="Developer" Style="{ThemeResource EncommDialogHeading}" Margin="0,12,0,0" />
+                <TextBlock Text="Developer Mode reveals renderer states, memory diagnostics, and DevTools. Normal browsing chrome stays the same." Style="{ThemeResource EncommQuietText}" TextWrapping="Wrap" />
+                <TextBlock x:Name="Status" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+            </StackPanel>
+        </ScrollViewer>
+    </NavigationView>
 </ContentDialog>

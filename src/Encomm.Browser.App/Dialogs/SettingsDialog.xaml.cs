@@ -36,6 +36,15 @@ public sealed partial class SettingsDialog : ContentDialog
         if (c.AI.HasSecret) SecretBox.PlaceholderText = "API key configured (•••••) — type to replace";
     }
 
+    private void OnCategoryChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItem is NavigationViewItem item && item.Tag is string tag)
+        {
+            var target = FindName(tag) as FrameworkElement;
+            target?.StartBringIntoView();
+        }
+    }
+
     private void OnSave(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         var c = _settings.Current;
@@ -60,16 +69,8 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void ApplyTheme(string theme)
     {
-        var w = ((App)Application.Current).MainWindowForTheme;
-        if (w is not null && w.Content is FrameworkElement fe)
-        {
-            fe.RequestedTheme = theme switch
-            {
-                "Light" => ElementTheme.Light,
-                "Dark" => ElementTheme.Dark,
-                _ => ElementTheme.Default
-            };
-        }
+        // Single theme path (wires the persisted setting to XAML).
+        App.ApplyTheme();
     }
 
     private void OnSaveKey(object sender, RoutedEventArgs e)
