@@ -39,6 +39,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Encomm.Browser.Engine.Abstractions\Encomm.Browser.Engine.Abstractions.csproj" />
+    <ProjectReference Include="..\Encomm.Browser.UI\Encomm.Browser.UI.csproj" />
     <ProjectReference Include="..\Encomm.Browser.Core\Encomm.Browser.Core.csproj" />
     <ProjectReference Include="..\Encomm.Browser.Engine.WebView2\Encomm.Browser.Engine.WebView2.csproj" />
     <ProjectReference Include="..\Encomm.Browser.Tabs\Encomm.Browser.Tabs.csproj" />
@@ -54,5 +55,10 @@
     <None Update="Assets\wordmark\encomm-mark.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- Owner-supplied brand PNGs (see Assets/Brand/README.md). Absent
+         files are fine: the UI falls back to glyph lockups. -->
+    <Content Include="Assets\Brand\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>

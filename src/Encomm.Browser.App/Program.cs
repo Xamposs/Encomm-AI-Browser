@@ -191,6 +191,8 @@ public static class Program
 
                     Log(logPath, "Constructing MainWindow.");
                     var window = new MainWindow();
+                    App.RegisterMainWindow(window);
+                    App.ApplyTheme();
                     Log(logPath, "MainWindow constructed; calling Activate.");
                     window.Activate();
                     Log(logPath, "Main window activated.");

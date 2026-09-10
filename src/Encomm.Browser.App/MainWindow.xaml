@@ -1,122 +1,248 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Encomm.Browser.App.MainWindow"
+    x:Name="RootWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:Encomm.Browser.App"
-    xmlns:vm="using:Encomm.Browser.App.ViewModels"
-    xmlns:tabs="using:Encomm.Browser.Core.Storage"
-    xmlns:controls="using:Encomm.Browser.App.Controls"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+    xmlns:controls="using:Encomm.Browser.App.Controls">
 
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Background="{ThemeResource EncommBackgroundBrush}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="40" />
+            <RowDefinition Height="48" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Toolbar / omnibox -->
-        <Border Grid.Row="0" Padding="8" Background="{ThemeResource LayerFillColorDefaultBrush}">
-            <Grid ColumnSpacing="6">
+        <!-- Integrated title bar + tab strip (drag region; system caption
+             buttons overlay the right spacer). -->
+        <Grid x:Name="TitleBarGrid" Grid.Row="0" Background="{ThemeResource EncommBackgroundBrush}"
+              ColumnSpacing="4" Padding="8,4,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="140" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Brand mark slot (official PNG or gradient-E fallback). -->
+            <Button Grid.Column="0" Width="32" Height="32" Padding="0"
+                    Background="Transparent" BorderThickness="0" CornerRadius="6"
+                    AutomationProperties.Name="ENCOMM" ToolTipService.ToolTip="ENCOMM AI Browser"
+                    Click="OnBrandClicked">
+                <Grid>
+                    <TextBlock Text="E" Style="{ThemeResource EncommMarkFallback}" />
+                    <Image x:Name="BrandMark" Stretch="Uniform"
+                           Source="ms-appx:///Assets/Brand/encomm-mark.png"
+                           ImageFailed="OnBrandImageFailed" />
+                </Grid>
+            </Button>
+
+            <!-- Tab strip: selection IS the active tab. Metadata only. -->
+            <ListView Grid.Column="1" x:Name="TabList"
+                      ItemsSource="{x:Bind ViewModel.Tabs, Mode=OneWay}"
+                      SelectionMode="Single"
+                      SelectionChanged="OnTabSelectionChanged"
+                      ContainerContentChanging="OnTabContainerChanging"
+                      ItemContainerStyle="{ThemeResource EncommTabItemContainer}"
+                      ScrollViewer.HorizontalScrollMode="Auto"
+                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                      ScrollViewer.VerticalScrollMode="Disabled"
+                      ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                      AutomationProperties.Name="Tabs">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <!-- Per-item visuals (initial, pin/mute, state
+                             badge, ghost hint) are applied from code
+                             (OnTabContainerChanging) so no value
+                             converters are needed in markup. -->
+                        <Grid ColumnSpacing="6" RightTapped="OnTabRightTapped"
+                              AutomationProperties.Name="{Binding Title}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="18" Height="18" CornerRadius="9"
+                                    Background="{ThemeResource EncommSecondaryBrush}">
+                                <TextBlock Tag="Initial" Text="?"
+                                           FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource EncommTextSecondaryBrush}" />
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="{Binding Title}"
+                                       Style="{ThemeResource EncommTabTitle}"
+                                       MaxWidth="180" MinWidth="24" />
+                            <TextBlock Grid.Column="2" Tag="PinGlyph" Text="&#xE718;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       Foreground="{ThemeResource EncommTextMutedBrush}" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       AutomationProperties.Name="Pinned" />
+                            <TextBlock Grid.Column="2" Tag="MuteGlyph" Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       Foreground="{ThemeResource EncommTextMutedBrush}" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       AutomationProperties.Name="Muted" />
+                            <Border Grid.Column="3" Tag="StateBadge" CornerRadius="3" Padding="4,1"
+                                    Background="{ThemeResource EncommSecondaryBrush}"
+                                    Visibility="Collapsed">
+                                <TextBlock Tag="StateBadgeText" Text="LIVE"
+                                           FontSize="9" Foreground="{ThemeResource EncommTextMutedBrush}" />
+                            </Border>
+                            <TextBlock Grid.Column="3" Tag="GhostHint" Text="&#x263E;" FontSize="10"
+                                       Foreground="{ThemeResource EncommTextMutedBrush}" Opacity="0.6"
+                                       VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       ToolTipService.ToolTip="Sleeping tab — click to wake" />
+                            <Button Grid.Column="4" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                    Width="22" Height="22" Padding="0" CornerRadius="4"
+                                    Background="Transparent" BorderThickness="0"
+                                    Foreground="{ThemeResource EncommTextMutedBrush}"
+                                    Tag="{Binding Id}" Click="OnTabCloseClick"
+                                    AutomationProperties.Name="Close tab" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+
+            <Button Grid.Column="2" Content="&#xE109;" Style="{ThemeResource EncommToolbarButton}"
+                    AutomationProperties.Name="New tab" ToolTipService.ToolTip="New tab (Ctrl+T)"
+                    Command="{x:Bind ViewModel.NewTabCommand}" />
+            <Button Grid.Column="3" Content="&#xE70D;" Style="{ThemeResource EncommToolbarButton}"
+                    AutomationProperties.Name="Search tabs" ToolTipService.ToolTip="Search tabs">
+                <Button.Flyout>
+                    <Flyout Opening="OnTabSearchOpening">
+                        <StackPanel Width="320" Spacing="8">
+                            <TextBox x:Name="TabSearchBox" PlaceholderText="Search tabs"
+                                     TextChanged="OnTabSearchTextChanged"
+                                     AutomationProperties.Name="Search tabs" />
+                            <ListView x:Name="TabSearchList" MaxHeight="320" SelectionChanged="OnTabSearchSelected"
+                                      DisplayMemberPath="Title" AutomationProperties.Name="Matching tabs" />
+                        </StackPanel>
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+        </Grid>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="1" Padding="8,6" Background="{ThemeResource EncommSurfaceBrush}"
+                BorderBrush="{ThemeResource EncommBorderBrush}" BorderThickness="0,0,0,1">
+            <Grid ColumnSpacing="4">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Content="Back" Command="{x:Bind ViewModel.BackCommand}" />
-                <Button Grid.Column="1" Content="Forward" Command="{x:Bind ViewModel.ForwardCommand}" />
-                <Button Grid.Column="2" Content="Reload" Command="{x:Bind ViewModel.ReloadCommand}" />
-                <Button Grid.Column="3" Content="Stop" Command="{x:Bind ViewModel.StopCommand}" />
-                <Button Grid.Column="4" Content="+" ToolTipService.ToolTip="New tab (Ctrl+T)" Command="{x:Bind ViewModel.NewTabCommand}" />
-                <Button Grid.Column="5" Content="&#x21BA;" ToolTipService.ToolTip="Reopen closed (Ctrl+Shift+T)" Command="{x:Bind ViewModel.ReopenClosedCommand}" />
+                <Button Grid.Column="0" Content="&#xE112;" Style="{ThemeResource EncommToolbarButton}"
+                        AutomationProperties.Name="Back" ToolTipService.ToolTip="Back (Alt+Left)"
+                        Command="{x:Bind ViewModel.BackCommand}" />
+                <Button Grid.Column="1" Content="&#xE76C;" Style="{ThemeResource EncommToolbarButton}"
+                        AutomationProperties.Name="Forward" ToolTipService.ToolTip="Forward (Alt+Right)"
+                        Command="{x:Bind ViewModel.ForwardCommand}" />
+                <Button Grid.Column="2" Content="&#xE117;" Style="{ThemeResource EncommToolbarButton}"
+                        AutomationProperties.Name="Reload" ToolTipService.ToolTip="Reload (Ctrl+R)"
+                        Command="{x:Bind ViewModel.ReloadCommand}" />
 
-                <ComboBox Grid.Column="6"
-                          MinWidth="120"
-                          ItemsSource="{x:Bind ViewModel.Workspaces}"
-                          SelectedItem="{x:Bind ViewModel.ActiveWorkspace, Mode=OneWay}"
-                          DisplayMemberPath="Name"
-                          SelectionChanged="OnWorkspaceSelectionChanged"
-                          ToolTipService.ToolTip="Active workspace" />
+                <DropDownButton Grid.Column="3" x:Name="WorkspaceButton"
+                                Style="{ThemeResource EncommWorkspaceButton}"
+                                AutomationProperties.Name="Workspace" ToolTipService.ToolTip="Switch workspace">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Width="20" Height="20" CornerRadius="10"
+                                Background="{ThemeResource EncommActiveIndicatorBrush}">
+                            <TextBlock x:Name="WorkspaceInitials" Text="P" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock x:Name="WorkspaceName" Text="Personal" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <DropDownButton.Flyout>
+                        <MenuFlyout Opening="OnWorkspaceFlyoutOpening" />
+                    </DropDownButton.Flyout>
+                </DropDownButton>
 
-                <TextBox Grid.Column="7"
-                         x:Name="AddressBox"
-                         Text="{x:Bind ViewModel.AddressBarText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         KeyDown="OnAddressKeyDown"
-                         PlaceholderText="Search or enter address..."
-                         Padding="6" />
+                <!-- Omnibox pill: identity + input + shield + AI. -->
+                <Border Grid.Column="4" x:Name="OmniboxBorder" Height="36" CornerRadius="10"
+                        Background="{ThemeResource EncommOmniboxBrush}"
+                        BorderBrush="{ThemeResource EncommBorderBrush}" BorderThickness="1"
+                        Padding="8,0">
+                    <Grid ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="&#xE72E;"
+                                FontFamily="Segoe MDL2 Assets" FontSize="12" Width="28" Height="28"
+                                Background="Transparent" BorderThickness="0" CornerRadius="6"
+                                Foreground="{ThemeResource EncommTextMutedBrush}"
+                                AutomationProperties.Name="Site information" ToolTipService.ToolTip="Site information">
+                            <Button.Flyout>
+                                <Flyout Opening="OnIdentityFlyoutOpening">
+                                    <StackPanel Spacing="6" MaxWidth="300">
+                                        <TextBlock Text="Connection" Style="{ThemeResource EncommDialogHeading}" />
+                                        <TextBlock x:Name="IdentityText" TextWrapping="Wrap"
+                                                   Style="{ThemeResource EncommChromeText}" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                        <TextBox Grid.Column="1" x:Name="AddressBox"
+                                 Text="{x:Bind ViewModel.AddressBarText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="OnAddressKeyDown" GotFocus="OnOmniboxFocus" LostFocus="OnOmniboxBlur"
+                                 PlaceholderText="Search or enter address"
+                                 Style="{ThemeResource EncommOmnibox}"
+                                 AutomationProperties.Name="Address bar" />
+                        <Button Grid.Column="2" Content="&#xE83D;"
+                                Style="{ThemeResource EncommToolbarButton}"
+                                AutomationProperties.Name="ENCOMM Shield" ToolTipService.ToolTip="ENCOMM Shield">
+                            <Button.Flyout>
+                                <Flyout Opening="OnShieldFlyoutOpening">
+                                    <StackPanel Spacing="8" Width="280">
+                                        <TextBlock Text="ENCOMM Shield" Style="{ThemeResource EncommDialogHeading}" />
+                                        <TextBlock x:Name="ShieldStatusText" Style="{ThemeResource EncommChromeText}" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="ShieldBlockedText" Style="{ThemeResource EncommQuietText}" />
+                                        <ToggleSwitch x:Name="ShieldToggle" OnContent="Protection enabled" OffContent="Protection off"
+                                                      Toggled="OnShieldToggled" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Button Grid.Column="3" Content="&#x2726;" Style="{ThemeResource EncommAiButton}"
+                                AutomationProperties.Name="ENCOMM AI" ToolTipService.ToolTip="Ask ENCOMM AI"
+                                Click="OnOpenAiPanel" />
+                    </Grid>
+                </Border>
 
-                <Button Grid.Column="8" Content="Go" Command="{x:Bind ViewModel.NavigateCommand}" Style="{ThemeResource AccentButtonStyle}" />
-                <Button Grid.Column="9" Content="..." ToolTipService.ToolTip="Menu" Click="OnMenuClicked">
+                <Button Grid.Column="5" Content="&#xE712;" Style="{ThemeResource EncommToolbarButton}"
+                        AutomationProperties.Name="Menu" ToolTipService.ToolTip="Menu">
                     <Button.Flyout>
                         <MenuFlyout>
                             <MenuFlyoutItem Text="New Tab" Command="{x:Bind ViewModel.NewTabCommand}" />
-                            <MenuFlyoutItem Text="Reopen Closed" Command="{x:Bind ViewModel.ReopenClosedCommand}" />
+                            <MenuFlyoutItem Text="Reopen Closed Tab" Command="{x:Bind ViewModel.ReopenClosedCommand}" />
                             <MenuFlyoutSeparator />
                             <MenuFlyoutItem Text="Pin / Unpin Active" Command="{x:Bind ViewModel.PinActiveTabCommand}" />
                             <MenuFlyoutItem Text="Duplicate Active" Command="{x:Bind ViewModel.DuplicateActiveTabCommand}" />
                             <MenuFlyoutItem Text="Sleep Active" Command="{x:Bind ViewModel.SleepActiveTabCommand}" />
-                            <MenuFlyoutItem Text="Ghost Active" Command="{x:Bind ViewModel.GhostActiveTabCommand}" />
                             <MenuFlyoutItem Text="Keep Awake Active" Command="{x:Bind ViewModel.ToggleKeepAwakeActiveTabCommand}" />
                             <MenuFlyoutItem Text="Close Active" Command="{x:Bind ViewModel.CloseActiveTabCommand}" />
                             <MenuFlyoutSeparator />
                             <ToggleMenuFlyoutItem x:Name="DeveloperModeItem" Text="Developer Mode" Click="OnToggleDeveloperMode" />
-                            <MenuFlyoutItem Text="Open Settings..." Click="OnOpenSettings" />
+                            <MenuFlyoutItem Text="ENCOMM AI..." Click="OnOpenAiPanel" />
                             <MenuFlyoutItem Text="Memory Panel..." Click="OnOpenMemoryPanel" />
-                            <MenuFlyoutItem Text="AI Command Bar..." Click="OnOpenAiPanel" />
+                            <MenuFlyoutItem Text="Settings..." Click="OnOpenSettings" />
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
             </Grid>
-        </Border>
-
-        <!-- Tab strip -->
-        <Border Grid.Row="1" Padding="8,4" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-            <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled">
-                <ItemsControl ItemsSource="{x:Bind ViewModel.Tabs}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="4" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="tabs:TabRecord">
-                            <!--
-                                The whole tab body selects the tab.
-                                The X button stops event propagation so it
-                                does not also trigger selection.
-                            -->
-                            <Border CornerRadius="6"
-                                    Padding="8,4"
-                                    BorderThickness="1"
-                                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                                    Background="{ThemeResource LayerFillColorDefaultBrush}"
-                                    Tapped="OnTabBodyTapped"
-                                    Tag="{x:Bind Id}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <TextBlock Text="&#x1F4CC;" Visibility="{Binding Pinned}" FontSize="11" />
-                                    <TextBlock Text="&#x1F507;" Visibility="{Binding Muted}" FontSize="11" />
-                                    <TextBlock Text="{x:Bind Title}" Width="160" TextTrimming="CharacterEllipsis" />
-                                    <Button Content="x" Padding="2"
-                                            Click="OnTabCloseClick"
-                                            Tag="{x:Bind Id}" />
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
         </Border>
 
         <!-- Content / active tab view -->
@@ -124,19 +250,20 @@
             <controls:BrowserHostControl x:Name="Host" />
         </Grid>
 
-        <!-- Status bar -->
-        <Border Grid.Row="3" Padding="8,4" Background="{ThemeResource LayerFillColorDefaultBrush}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" FontSize="11" Opacity="0.8" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="{x:Bind ViewModel.Mode, Mode=OneWay}" FontSize="11" Opacity="0.8" />
-                    <TextBlock Text="{x:Bind ViewModel.SelectedWorkspaceName, Mode=OneWay}" FontSize="11" Opacity="0.8" />
-                </StackPanel>
-            </Grid>
+        <!-- Developer strip: diagnostics only, never in Everyday.
+             Visibility is driven from code (App.DevMode) because this
+             element loads with the page. -->
+        <Border x:Name="DevStrip" Grid.Row="3" Padding="8,2"
+                Background="{ThemeResource EncommSurfaceBrush}"
+                BorderBrush="{ThemeResource EncommBorderBrush}" BorderThickness="0,1,0,0"
+                Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Style="{ThemeResource EncommQuietText}" />
+                <TextBlock Text="{x:Bind ViewModel.Mode, Mode=OneWay}" Style="{ThemeResource EncommQuietText}" />
+                <TextBlock Text="{x:Bind ViewModel.SelectedWorkspaceName, Mode=OneWay}" Style="{ThemeResource EncommQuietText}" />
+                <Button Content="DevTools (F12)" Padding="6,1" FontSize="11" Click="OnOpenDevTools" />
+                <Button Content="Memory" Padding="6,1" FontSize="11" Click="OnOpenMemoryPanel" />
+            </StackPanel>
         </Border>
     </Grid>
 </Window>

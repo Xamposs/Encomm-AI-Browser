@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Encomm.Browser.App.Services;
 using Encomm.Browser.App.ViewModels;
 using Encomm.Browser.Core;
@@ -78,11 +79,21 @@ public partial class App : Application
 #pragma warning disable CS0649
     private Window? _mainWindow;
 #pragma warning restore CS0649
+    private static Window? _liveMainWindow;
     private readonly ILogger<App>? _log;
 
     public App()
     {
         InitializeComponent();
+        // Last-resort crash telemetry: fire-and-forget async UI work
+        // (host refreshes, event bridges) can escape every local
+        // try/catch; without this the process dies in native code with
+        // no managed trace. This writes the sidecar, never throws.
+        try { UnhandledException += OnAppUnhandledException; } catch { }
+        // NOTE: value converters + DevMode are registered into the MAIN
+        // WINDOW's resource bag from MainWindow's ctor (not here:
+        // Application.Resources is not yet accessible during App
+        // construction — get_Resources throws 0x8000FFFF).
         // Program.Main builds the container before XAML starts so the
         // dispatcher can be attached. Never build it twice: a second
         // container would orphan the dispatcher wiring and every service
@@ -97,7 +108,7 @@ public partial class App : Application
         _log?.LogInformation("App constructor finished.");
     }
 
-    public Window? MainWindowForTheme => _mainWindow;
+    public Window? MainWindowForTheme => _liveMainWindow ?? _mainWindow;
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -223,6 +234,70 @@ public partial class App : Application
     }
 
     public static void SetStartupArgs(string[] args) => StartupArgs = args;
+
+    private static void OnAppUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+    {
+        try
+        {
+            var dir = BrowserPaths.Default().LogsDirectory;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "encomm.unhandled.txt"),
+                $"{DateTimeOffset.Now:O} handled={e.Handled}{Environment.NewLine}{e.Exception}{Environment.NewLine}{e.Message}");
+        }
+        catch { }
+    }
+
+    /// <summary>Shared developer-layer visibility (badges, dev strip).</summary>
+    public static Encomm.Browser.UI.DevModeState DevMode { get; } = new();
+
+    /// <summary>
+    /// The live main window, registered by Program after construction
+    /// (the App instance itself never owns it). Used by ApplyTheme and
+    /// test hooks that need the window without a XAML tree.
+    /// </summary>
+    public static void RegisterMainWindow(Window window) => _liveMainWindow = window;
+
+    /// <summary>
+    /// Apply BrowserSettings.Theme to the live window at runtime (no
+    /// restart). Safe to call when no window is registered.
+    /// </summary>
+    public static void ApplyTheme()
+    {
+        try
+        {
+            var theme = Services.GetRequiredService<SettingsService>().Current.Theme;
+            if (_liveMainWindow?.Content is FrameworkElement fe)
+            {
+                fe.RequestedTheme = ThemeMapper.ToElementThemeName(theme) switch
+                {
+                    "Light" => ElementTheme.Light,
+                    "Dark" => ElementTheme.Dark,
+                    _ => ElementTheme.Default,
+                };
+            }
+        }
+        catch { /* theme is cosmetic; never break startup */ }
+    }
+
+    /// <summary>
+    /// Apply BrowserSettings.Theme to a dialog. ContentDialogs render in
+    /// a separate popup root that does NOT inherit the window content's
+    /// RequestedTheme, so every dialog must be themed explicitly.
+    /// </summary>
+    public static void ApplyDialogTheme(ContentDialog dlg)
+    {
+        try
+        {
+            var theme = Services.GetRequiredService<SettingsService>().Current.Theme;
+            dlg.RequestedTheme = ThemeMapper.ToElementThemeName(theme) switch
+            {
+                "Light" => ElementTheme.Light,
+                "Dark" => ElementTheme.Dark,
+                _ => ElementTheme.Default,
+            };
+        }
+        catch { }
+    }
 }
 
 /// <summary>
