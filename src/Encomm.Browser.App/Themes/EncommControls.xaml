@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ENCOMM control styles: thin native refinements over the default
+    WinUI styles. No full retemplating except where the product needs
+    it; hover/press physics stay stock Fluent. Glyphs are Segoe
+    MDL2/Fluent codepoints (see docs/UI_DESIGN_SYSTEM.md).
+-->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 32px icon-only toolbar button. Content is a Segoe glyph. -->
+    <Style x:Key="EncommToolbarButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommTextSecondaryBrush}" />
+    </Style>
+
+    <!-- ENCOMM AI entry point: gradient glyph, quiet chrome. -->
+    <Style x:Key="EncommAiButton" TargetType="Button" BasedOn="{StaticResource EncommToolbarButton}">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommAccentCyanBrush}" />
+    </Style>
+
+    <!-- Brand mark slot: image over a fallback glyph. -->
+    <Style x:Key="EncommMarkFallback" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommAccentCyanBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- Browser tab container: roomy, rounded, calm. The default
+         ListView selection visuals mark the active tab; content stays
+         understated. No neon per-tab fills. -->
+    <Style x:Key="EncommTabItemContainer" TargetType="ListViewItem">
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Margin" Value="0,0,4,0" />
+        <Setter Property="Background" Value="{ThemeResource EncommTabInactiveBrush}" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommTextSecondaryBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- Workspace chevron button: compact, text-first. -->
+    <Style x:Key="EncommWorkspaceButton" TargetType="DropDownButton">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommTextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+
+    <!-- Omnibox: dark elevated pill; the wrapper Border (in
+         MainWindow) draws the neutral border + cyan focus ring. -->
+    <Style x:Key="EncommOmnibox" TargetType="TextBox" BasedOn="{StaticResource DefaultTextBoxStyle}">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="4,0" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommTextPrimaryBrush}" />
+    </Style>
+
+    <!-- New Tab action buttons (Search / Ask ENCOMM). -->
+    <Style x:Key="EncommNewTabAction" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+        <Setter Property="MinWidth" Value="220" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Background" Value="{ThemeResource EncommElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource EncommBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{ThemeResource EncommTextPrimaryBrush}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+</ResourceDictionary>
