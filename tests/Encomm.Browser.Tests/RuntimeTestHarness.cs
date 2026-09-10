@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Encomm.Browser.AI;
 using Encomm.Browser.App.Services;
+using Encomm.Browser.App.ViewModels;
 using Encomm.Browser.Core;
 using Encomm.Browser.Core.Storage;
 using Encomm.Browser.Engine.Abstractions;
+using Encomm.Browser.Settings;
 using Encomm.Browser.Shield;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -71,6 +74,18 @@ internal sealed class SharedContext : IDisposable
     public void FailNext(Guid id) => Engine.Views[id].CompleteWithSuccess = false;
     public FakeView ViewFor(Guid id) => Engine.Views[id];
 
+    /// <summary>Build the real MainViewModel over the fake engine for
+    /// canonical close/select path tests (no WebView2, no XAML).</summary>
+    public MainViewModel CreateViewModel()
+    {
+        var secrets = new FakeSecretStore();
+        var settings = new SettingsService(new SettingsStore(_store, secrets));
+        var workspaces = new WorkspaceService(Persistence, NullLogger<WorkspaceService>.Instance);
+        var ai = new AIService(new FakeRouter(), secrets, Runtime, NullLogger<AIService>.Instance);
+        return new MainViewModel(workspaces, Tabs, Runtime, ai, settings,
+            NullLogger<MainViewModel>.Instance);
+    }
+
     public TabRendererStateKind StateOf(Guid id)
     {
         foreach (var t in Tabs.Tabs) if (t.Id == id) return t.RendererState;
@@ -95,6 +110,21 @@ internal sealed class InlineDispatcher : IUiDispatcher
     public bool HasThreadAccess => true;
     public void Post(Action action) => action();
     public Task<T> RunAsync<T>(Func<Task<T>> func) => func();
+}
+
+internal sealed class FakeSecretStore : ISecretStore
+{
+    public void SetSecret(string name, string value) { }
+    public string? GetSecret(string name) => null;
+    public void DeleteSecret(string name) { }
+}
+
+internal sealed class FakeRouter : IModelRouter
+{
+    public bool IsConfigured => false;
+    public IChatProvider Chat => throw new NotSupportedException();
+    public IEmbeddingProvider? Embeddings => null;
+    public Task<bool> TestConnectionAsync(CancellationToken ct = default) => Task.FromResult(false);
 }
 
 internal sealed class FakeEngine : IBrowserEngine

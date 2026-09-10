@@ -62,6 +62,18 @@ public class StateDivergenceTests
     }
 
     [Fact]
+    public void No_error_when_native_live_tab_has_no_renderer()
+    {
+        var (tabs, views) = MakeState();
+        tabs.Add(new TabRecord(Guid.NewGuid(), Guid.NewGuid(), "encomm://newtab", "New Tab", null,
+            TabRendererStateKind.Live, TabLogicalStateKind.Active,
+            false, false, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, null));
+        var div = new StateDivergenceInspector(tabs, views);
+        var report = div.Inspect();
+        Assert.Empty(report.Errors);
+    }
+
+    [Fact]
     public void Formatter_produces_human_readable_output()
     {
         var report = new StateDivergenceReport
