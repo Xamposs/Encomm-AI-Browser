@@ -30,6 +30,7 @@ public sealed class BrowserPersistenceService
             int current = raw is long l ? (int)l : 0;
             if (current < 1) MigrateTo1(conn);
             if (current < 2) MigrateTo2(conn);
+            if (current < 3) MigrateTo3(conn);
         }
     }
 
@@ -92,6 +93,104 @@ PRAGMA user_version = 2;
         catch { /* columns already exist */ }
     }
 
+    /// <summary>
+    /// Schema v3: ENCOMM Canvas records.
+    ///
+    /// The canvas itself is stored as an opaque JSON payload so its shape
+    /// can evolve without further migrations (see <c>CanvasPayload</c> in
+    /// the AI layer). Only listing/query fields are real columns: the
+    /// storage layer never interprets canvas content.
+    /// </summary>
+    private static void MigrateTo3(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE IF NOT EXISTS canvases(
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    intent TEXT NOT NULL DEFAULT '',
+    kind INTEGER NOT NULL DEFAULT 0,
+    status INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL,
+    created_utc TEXT NOT NULL,
+    updated_utc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_canvases_workspace ON canvases(workspace_id, created_utc DESC);
+PRAGMA user_version = 3;
+";
+        try { cmd.ExecuteNonQuery(); }
+        catch { /* table already exists */ }
+    }
+
+    /// <summary>Persist (insert or replace) a canvas record.</summary>
+    public void SaveCanvas(CanvasRecord canvas)
+    {
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO canvases(id,workspace_id,title,intent,kind,status,payload_json,created_utc,updated_utc)
+VALUES($i,$w,$t,$n,$k,$s,$p,$c,$u)
+ON CONFLICT(id) DO UPDATE SET
+  title=$t, intent=$n, kind=$k, status=$s, payload_json=$p, updated_utc=$u;";
+        cmd.Parameters.AddWithValue("$i", canvas.Id.ToString());
+        cmd.Parameters.AddWithValue("$w", canvas.WorkspaceId.ToString());
+        cmd.Parameters.AddWithValue("$t", canvas.Title ?? "");
+        cmd.Parameters.AddWithValue("$n", canvas.Intent ?? "");
+        cmd.Parameters.AddWithValue("$k", canvas.Kind);
+        cmd.Parameters.AddWithValue("$s", canvas.Status);
+        cmd.Parameters.AddWithValue("$p", canvas.PayloadJson ?? "");
+        cmd.Parameters.AddWithValue("$c", canvas.CreatedUtc.ToString("o"));
+        cmd.Parameters.AddWithValue("$u", canvas.UpdatedUtc.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Most recent canvas for a workspace, or null.</summary>
+    public CanvasRecord? LoadLatestCanvas(Guid workspaceId)
+    {
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id,workspace_id,title,intent,kind,status,payload_json,created_utc,updated_utc " +
+                          "FROM canvases WHERE workspace_id=$w ORDER BY created_utc DESC, rowid DESC LIMIT 1;";
+        cmd.Parameters.AddWithValue("$w", workspaceId.ToString());
+        using var rdr = cmd.ExecuteReader();
+        return rdr.Read() ? ReadCanvas(rdr) : null;
+    }
+
+    /// <summary>Newest canvases for a workspace.</summary>
+    public List<CanvasRecord> LoadCanvases(Guid workspaceId, int limit = 20)
+    {
+        var list = new List<CanvasRecord>();
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id,workspace_id,title,intent,kind,status,payload_json,created_utc,updated_utc " +
+                          "FROM canvases WHERE workspace_id=$w ORDER BY created_utc DESC, rowid DESC LIMIT $l;";
+        cmd.Parameters.AddWithValue("$w", workspaceId.ToString());
+        cmd.Parameters.AddWithValue("$l", Math.Max(1, limit));
+        using var rdr = cmd.ExecuteReader();
+        while (rdr.Read()) list.Add(ReadCanvas(rdr));
+        return list;
+    }
+
+    public void DeleteCanvas(Guid id)
+    {
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM canvases WHERE id=$i;";
+        cmd.Parameters.AddWithValue("$i", id.ToString());
+        cmd.ExecuteNonQuery();
+    }
+
+    private static CanvasRecord ReadCanvas(SqliteDataReader rdr) => new(
+        Guid.Parse(rdr.GetString(0)),
+        Guid.Parse(rdr.GetString(1)),
+        rdr.GetString(2),
+        rdr.GetString(3),
+        rdr.GetInt32(4),
+        rdr.GetInt32(5),
+        rdr.GetString(6),
+        DateTimeOffset.Parse(rdr.GetString(7)),
+        DateTimeOffset.Parse(rdr.GetString(8)));
+
     public void SaveWorkspace(WorkspaceRecord w)
     {
         using var conn = _store.OpenConnection();
@@ -130,7 +229,8 @@ PRAGMA user_version = 2;
     {
         using var conn = _store.OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM workspaces WHERE id=$i; DELETE FROM tabs WHERE workspace_id=$i;";
+        cmd.CommandText = "DELETE FROM workspaces WHERE id=$i; DELETE FROM tabs WHERE workspace_id=$i; " +
+                          "DELETE FROM canvases WHERE workspace_id=$i;";
         cmd.Parameters.AddWithValue("$i", id.ToString());
         cmd.ExecuteNonQuery();
     }
@@ -293,3 +393,22 @@ public sealed record TabRecord(
     double ScrollY = 0);
 
 public sealed record RecentlyClosedRecord(Guid OriginalTabId, string Url, string Title, Guid WorkspaceId, DateTimeOffset ClosedUtc);
+
+/// <summary>
+/// Storage shape of an ENCOMM Canvas (a browser-generated workspace).
+///
+/// <see cref="PayloadJson"/> is opaque to this layer: the AI layer owns
+/// the canvas schema, so no migration is needed when the canvas shape
+/// evolves. Kind/Status mirror the AI enums as integers to keep the
+/// storage project free of an AI reference.
+/// </summary>
+public sealed record CanvasRecord(
+    Guid Id,
+    Guid WorkspaceId,
+    string Title,
+    string Intent,
+    int Kind,
+    int Status,
+    string PayloadJson,
+    DateTimeOffset CreatedUtc,
+    DateTimeOffset UpdatedUtc);

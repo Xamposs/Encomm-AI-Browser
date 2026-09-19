@@ -237,6 +237,7 @@
                             <MenuFlyoutSeparator />
                             <ToggleMenuFlyoutItem x:Name="DeveloperModeItem" Text="Developer Mode" Click="OnToggleDeveloperMode" />
                             <MenuFlyoutItem Text="ENCOMM AI..." Click="OnOpenAiPanel" />
+                            <MenuFlyoutItem Text="ENCOMM Canvas..." Click="OnOpenCanvasPanel" />
                             <MenuFlyoutItem Text="Memory Panel..." Click="OnOpenMemoryPanel" />
                             <MenuFlyoutItem Text="Settings..." Click="OnOpenSettings" />
                         </MenuFlyout>

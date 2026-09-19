@@ -235,19 +235,23 @@ public sealed partial class AICommandDialog : ContentDialog
         var hasQuestion = !string.IsNullOrWhiteSpace(QuestionBox.Text);
         AskButton.IsEnabled = hasQuestion && !Busy.IsActive;
     }
-}
 
-/// <summary>One clickable citation chip.</summary>
-public sealed record AiSourceChip(string Label, string Title, string Url, Guid TabId)
-{
-    public string AccessibleName => $"Open source {Label}: {Title}";
+    /// <summary>
+    /// Bridge from an answer to a workspace artifact: carry the question the
+    /// user just asked into the Canvas surface as the intent, so a good
+    /// answer can become a reusable generated workspace.
+    /// </summary>
+    private async void OnBuildCanvas(object sender, RoutedEventArgs e)
+    {
+        var intent = !string.IsNullOrWhiteSpace(_vm.AiCommandText) ? _vm.AiCommandText : QuestionBox.Text;
+        try { Hide(); } catch { }
+        try
+        {
+            var dlg = new CanvasDialog { InitialIntent = intent?.Trim() };
+            if (XamlRoot is not null) dlg.XamlRoot = XamlRoot;
+            App.ApplyDialogTheme(dlg);
+            await dlg.ShowAsync();
+        }
+        catch { }
+    }
 }
-
-/// <summary>Rendered shape of one structured result item.</summary>
-public sealed record AiItemView(
-    string Label,
-    string DetailLine,
-    string FactsLine,
-    Visibility DetailVisibility,
-    Visibility FactsVisibility,
-    IReadOnlyList<AiSourceChip> SourceChips);

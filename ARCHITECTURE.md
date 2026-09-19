@@ -185,6 +185,29 @@ UI action (native ENCOMM surface)
   prompts, keys, credentials or local files.
 * See `docs/PHASE_3B_REPORT.md`.
 
+### Phase 3C — ENCOMM Canvas (generated workspaces)
+
+```
+intent + bounded sources
+  -> AIService.GenerateCanvasAsync  (same context/renderer policy as 3B)
+  -> CanvasSystemPrompt             (task-specific workspace, not prose)
+  -> CanvasParser                   (comparison | evidence | summary, graceful)
+  -> CanvasService                  (persist per workspace, load latest)
+  -> CanvasDialog                   (native table / list, per-cell citations)
+```
+
+* A canvas is a **workspace artifact**, not a chat answer: persisted per
+  workspace (SQLite `canvases` table, payload opaque so its shape can
+  evolve without migrations), reopenable, regenerable and deletable.
+* **Per-cell traceability**: every claim carries its own citation labels,
+  resolved back to real tabs.
+* **Honest degradation**: columns are synthesised from differing facts,
+  an evidence list is chosen over a fake table, and unstructured output
+  becomes a summary rather than an error.
+* Only usable canvases are stored; unconfigured/no-source/failure are
+  transient UX states.
+* See `docs/PHASE_3C_REPORT.md`.
+
 ## Storage
 
 * Local embedded SQLite (Microsoft.Data.Sqlite).

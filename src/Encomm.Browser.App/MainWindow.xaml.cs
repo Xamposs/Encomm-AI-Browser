@@ -526,6 +526,20 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
+    /// <summary>
+    /// ENCOMM Canvas: the browser-generated workspace for the active
+    /// workspace's intent. Native surface, no WebViews.
+    /// </summary>
+    private async void OnOpenCanvasPanel(object sender, RoutedEventArgs e)
+    {
+        var dlg = new CanvasDialog
+        {
+            XamlRoot = this.Content.XamlRoot
+        };
+        App.ApplyDialogTheme(dlg);
+        await dlg.ShowAsync();
+    }
+
     // -- Brand slot ---------------------------------------------------
 
     private void OnBrandClicked(object sender, RoutedEventArgs e)

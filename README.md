@@ -23,16 +23,17 @@ The ordinary user should never need to know what a "token" is.
 
 ## Status
 
-**Phase 3B — Workspace Intelligence MVP** (development snapshot).
+**Phase 3C — ENCOMM Canvas** (development snapshot).
 
 Browsing, Ghost tabs, workspaces, Shield and the branded shell are in
-place (Phases 1 → 3A). Phase 3B makes ENCOMM AI-native: page and
-workspace summaries, comparisons, key-fact extraction and Q&A — each
-answered from a **bounded, cited** source set, rendered on a native
-ENCOMM surface, and fully optional. Browsing remains excellent with AI
-disabled or unconfigured. See `docs/PHASE_3B_REPORT.md`.
+place (Phases 1 → 3A). Phases 3B/3C make ENCOMM AI-native: page/workspace
+intelligence and the first **ENCOMM Canvas** — an intent-driven generated
+workspace (a comparison table or evidence list) whose every claim cites
+the real tab it came from, rendered natively and persisted per workspace.
+AI stays optional; browsing remains excellent with AI disabled or
+unconfigured. See `docs/PHASE_3C_REPORT.md`.
 
-Current test suite: **130/130 passing**.
+Current test suite: **148/148 passing**.
 
 The repository is public; the source remains **proprietary** to ENCOMM
 (public source ≠ open-source license).

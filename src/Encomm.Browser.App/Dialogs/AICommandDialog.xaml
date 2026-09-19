@@ -137,6 +137,8 @@
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <Button x:Name="CopyButton" Content="Copy result" Click="OnCopy"
                         Visibility="Collapsed" AutomationProperties.Name="Copy AI result" />
+                <Button x:Name="CanvasButton" Content="Turn into a Canvas" Click="OnBuildCanvas"
+                        AutomationProperties.Name="Turn into an ENCOMM Canvas" />
                 <TextBlock x:Name="Footnote" VerticalAlignment="Center"
                            TextWrapping="Wrap" Style="{ThemeResource EncommQuietText}" />
             </StackPanel>

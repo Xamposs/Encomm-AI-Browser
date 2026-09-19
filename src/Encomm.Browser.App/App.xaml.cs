@@ -174,6 +174,7 @@ public partial class App : Application
         });
 
         services.AddSingleton<AIService>();
+        services.AddSingleton<CanvasService>();
 
         services.AddSingleton<MemoryProbe>(sp =>
             new MemoryProbe(() =>
