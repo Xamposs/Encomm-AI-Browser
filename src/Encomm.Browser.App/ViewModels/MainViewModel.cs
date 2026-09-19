@@ -28,7 +28,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _mode = "Everyday";
     [ObservableProperty] private bool _showDeveloperSurfaces;
     [ObservableProperty] private string _aiCommandText = "";
-    [ObservableProperty] private string _aiCommandResult = "";
+    [ObservableProperty] private AIResult? _aiResult;
     [ObservableProperty] private string _selectedWorkspaceName = "Personal";
 
     public ObservableCollection<WorkspaceRecord> Workspaces => _workspaces.Workspaces;
@@ -79,12 +79,9 @@ public sealed partial class MainViewModel : ObservableObject
             Title = string.IsNullOrEmpty(t?.Title) ? "Encomm AI Browser" : t!.Title;
         };
 
-        AiCommands.Add(new AiCommandDescriptor("Summarize this page", "summarize-page"));
-        AiCommands.Add(new AiCommandDescriptor("Explain selection", "explain-selection"));
-        AiCommands.Add(new AiCommandDescriptor("Ask about this page", "ask-page"));
-        AiCommands.Add(new AiCommandDescriptor("Compare tabs in this workspace", "compare-workspace"));
-        AiCommands.Add(new AiCommandDescriptor("Organize workspace", "organize-workspace"));
-        AiCommands.Add(new AiCommandDescriptor("Extract key information", "extract-info"));
+        // Command catalogue lives in AIService (single source of truth).
+        foreach (var command in AIService.Commands)
+            AiCommands.Add(new AiCommandDescriptor(command.Label, command.Id, command.Scope, command.RequiresQuestion));
     }
 
     // -- Commands ----------------------------------------------------
@@ -325,9 +322,20 @@ public sealed partial class MainViewModel : ObservableObject
     public async Task RunAiCommandAsync(AiCommandDescriptor descriptor)
     {
         if (descriptor is null) return;
-        AiCommandResult = "Working...";
-        var result = await _ai.RunAsync(descriptor.Id, ActiveTab, _tabs.Tabs.ToList());
-        AiCommandResult = result;
+        AiResult = await _ai.RunAsync(new AICommandRequest(
+            descriptor.Id, ActiveTab, _tabs.Tabs.ToList(), AiCommandText));
+    }
+
+    /// <summary>
+    /// Activate the tab behind an AI citation. This is an ordinary tab
+    /// switch, so normal Ghost-restore rules and protection apply.
+    /// </summary>
+    [RelayCommand]
+    public async Task ActivateAiSourceAsync(Guid tabId)
+    {
+        var tab = _tabs.FindTab(tabId);
+        if (tab is null) return;
+        await SelectTabAsync(tab);
     }
 
     [RelayCommand]
@@ -364,4 +372,8 @@ public sealed partial class MainViewModel : ObservableObject
     }
 }
 
-public sealed record AiCommandDescriptor(string Label, string Id);
+public sealed record AiCommandDescriptor(
+    string Label,
+    string Id,
+    AICommandScope Scope = AICommandScope.Page,
+    bool RequiresQuestion = false);

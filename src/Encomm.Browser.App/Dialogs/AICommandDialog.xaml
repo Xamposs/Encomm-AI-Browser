@@ -5,19 +5,141 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="ENCOMM AI"
     CloseButtonText="Close">
-    <StackPanel Spacing="8" Width="520">
-        <TextBlock x:Name="ProviderLabel" Opacity="0.7" />
-        <TextBlock Text="Actions" FontWeight="SemiBold" />
-        <ItemsControl x:Name="Commands">
+
+    <Grid Width="580" RowSpacing="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="ProviderLabel" Grid.Row="0"
+                   Style="{ThemeResource EncommChromeText}" TextWrapping="Wrap" />
+
+        <ItemsControl x:Name="Commands" Grid.Row="1">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VariableSizedWrapGrid Orientation="Horizontal" ItemWidth="188" ItemHeight="38" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Button Content="{Binding Label}" Click="OnRunCommand" Tag="{Binding Id}" HorizontalAlignment="Stretch" Margin="0,2" />
+                    <Button Content="{Binding Label}" Tag="{Binding Id}" Click="OnRunCommand"
+                            HorizontalAlignment="Stretch" Margin="0,2,6,2"
+                            AutomationProperties.Name="{Binding Label}" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <TextBlock Text="Result" FontWeight="SemiBold" />
-        <ScrollViewer MaxHeight="280">
-            <TextBlock x:Name="ResultBox" TextWrapping="Wrap" FontFamily="Consolas" />
-        </ScrollViewer>
-    </StackPanel>
+
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="AskScope" Grid.Column="0" MinWidth="170"
+                      AutomationProperties.Name="Ask scope">
+                <ComboBoxItem Content="About this page" Tag="ask-page" />
+                <ComboBoxItem Content="Across this workspace" Tag="ask-workspace" />
+            </ComboBox>
+            <TextBox x:Name="QuestionBox" Grid.Column="1" PlaceholderText="Ask ENCOMM AI…"
+                     AutomationProperties.Name="Ask ENCOMM AI" />
+            <Button x:Name="AskButton" Grid.Column="2" Content="Ask" Click="OnAsk"
+                    AutomationProperties.Name="Ask ENCOMM AI" />
+        </Grid>
+
+        <StackPanel Grid.Row="3" Spacing="8">
+            <ProgressRing x:Name="Busy" IsActive="False" Visibility="Collapsed"
+                          Width="20" Height="20" HorizontalAlignment="Left" />
+            <TextBlock x:Name="ResultTitle" TextWrapping="Wrap"
+                       Style="{ThemeResource EncommDialogHeading}" />
+            <TextBlock x:Name="ResultSummary" TextWrapping="Wrap"
+                       Style="{ThemeResource EncommChromeText}" />
+
+            <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="10">
+                    <ItemsControl x:Name="Items">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{ThemeResource EncommSurfaceBrush}"
+                                        BorderBrush="{ThemeResource EncommBorderBrush}"
+                                        BorderThickness="1" CornerRadius="8"
+                                        Padding="10" Margin="0,0,0,8">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="{Binding Label}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding DetailLine}" TextWrapping="Wrap"
+                                                   Visibility="{Binding DetailVisibility}" />
+                                        <TextBlock Text="{Binding FactsLine}" TextWrapping="Wrap"
+                                                   Visibility="{Binding FactsVisibility}"
+                                                   Style="{ThemeResource EncommQuietText}" />
+                                        <ItemsControl ItemsSource="{Binding SourceChips}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Content="{Binding Label}" Tag="{Binding TabId}"
+                                                            Click="OnActivateSource" Padding="8,2"
+                                                            Foreground="{ThemeResource EncommAccentCyanBrush}"
+                                                            ToolTipService.ToolTip="{Binding Title}"
+                                                            AutomationProperties.Name="{Binding AccessibleName}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel x:Name="UncertaintyPanel" Spacing="2" Visibility="Collapsed">
+                        <TextBlock Text="Worth checking" Style="{ThemeResource EncommChromeTitle}" />
+                        <ItemsControl x:Name="Uncertainties">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                               Style="{ThemeResource EncommQuietText}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SourcePanel" Spacing="4" Visibility="Collapsed">
+                        <TextBlock x:Name="SourceHeading" Text="Sources"
+                                   Style="{ThemeResource EncommChromeTitle}" />
+                        <ItemsControl x:Name="Sources">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Click="OnActivateSource" Tag="{Binding TabId}"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Left" Margin="0,1"
+                                            AutomationProperties.Name="{Binding AccessibleName}">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Label}"
+                                                       Foreground="{ThemeResource EncommAccentCyanBrush}" />
+                                            <TextBlock Text="{Binding Title}" MaxWidth="220"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Url}" MaxWidth="240"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Style="{ThemeResource EncommQuietText}" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Button x:Name="CopyButton" Content="Copy result" Click="OnCopy"
+                        Visibility="Collapsed" AutomationProperties.Name="Copy AI result" />
+                <TextBlock x:Name="Footnote" VerticalAlignment="Center"
+                           TextWrapping="Wrap" Style="{ThemeResource EncommQuietText}" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
 </ContentDialog>

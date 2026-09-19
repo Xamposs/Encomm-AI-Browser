@@ -258,6 +258,12 @@ public sealed partial class MainWindow : Window
         try
         {
             var dev = App.DevMode.ShowBadges;
+            // Screen readers must never hear "TabRecord { ... }". The
+            // accessible name comes from the tested presentation mapper
+            // (title + pinned/muted/sleeping), so tab state stays
+            // understandable in Everyday Mode.
+            var visual = TabVisualMapper.Map(tab, dev);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(root, visual.AccessibleName);
             SetTagText(root, "Initial", Encomm.Browser.UI.TabItemHelper.Initial(tab.Title));
             SetTagVisibility(root, "PinGlyph", tab.Pinned);
             SetTagVisibility(root, "MuteGlyph", tab.Muted);
@@ -265,12 +271,11 @@ public sealed partial class MainWindow : Window
             var badgeText = FindByTag(root, "StateBadgeText") as TextBlock;
             var hint = FindByTag(root, "GhostHint");
             if (badge is not null)
-                badge.Visibility = dev ? Visibility.Visible : Visibility.Collapsed;
+                badge.Visibility = visual.ShowStateBadge ? Visibility.Visible : Visibility.Collapsed;
             if (badgeText is not null)
-                badgeText.Text = tab.RendererState.ToString().ToUpperInvariant();
+                badgeText.Text = visual.StateBadge ?? tab.RendererState.ToString().ToUpperInvariant();
             if (hint is not null)
-                hint.Visibility = (!dev && tab.RendererState == TabRendererStateKind.Ghost)
-                    ? Visibility.Visible : Visibility.Collapsed;
+                hint.Visibility = visual.ShowGhostHint ? Visibility.Visible : Visibility.Collapsed;
         }
         catch { }
     }

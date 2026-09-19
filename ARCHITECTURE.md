@@ -152,6 +152,39 @@ WebView2 navigates OR returns synthetic empty response
   optionally mirrored to Windows Credential Manager. Secrets never enter
   SQLite, settings files, logs, crash dumps, or git.
 
+### Phase 3B — Workspace Intelligence (`Encomm.Browser.AI/Intelligence`)
+
+```
+UI action (native ENCOMM surface)
+  -> AIService              (App layer: command catalogue, renderer policy)
+  -> AIContextBuilder       (bounded + ranked + citable sources)
+  -> IModelRouter -> provider
+  -> StructuredResultParser (AIResult: items, facts, sources)
+  -> native result surface with clickable citation chips
+```
+
+* **Bounded by policy**, never by hope: max tabs, max chars per tab, max
+  total chars, max question length (`AIContextLimits`). Native/blank tabs
+  are never sent; tabs whose content was not read are labelled
+  "metadata only".
+* **Traceable**: every source carries a citation handle (`S1`, `S2`, …)
+  that the host resolves back to a real tab (`SourceLabelIndex`).
+  Invented labels are dropped rather than displayed.
+* **Structured**: models are asked for one JSON object; the parser accepts
+  plain/fenced/embedded JSON and never throws
+  (`StructuredResultParser`). Raw text is preserved.
+* **Renderer discipline**: the AI path never allocates a renderer merely
+  to build context. Only the tab the user explicitly targets may be
+  restored; everything else contributes metadata unless it already has a
+  renderer. AI therefore never changes the Live/Warm/Ghost lifecycle.
+* **Failure experience**: unconfigured ⇒ no provider call and a plain
+  language notice; provider failure ⇒ retry-friendly result with technical
+  detail reserved for Developer Mode.
+* **Untrusted input**: page text is treated as data, not instructions; the
+  system prompt forbids following in-page directions and forbids revealing
+  prompts, keys, credentials or local files.
+* See `docs/PHASE_3B_REPORT.md`.
+
 ## Storage
 
 * Local embedded SQLite (Microsoft.Data.Sqlite).

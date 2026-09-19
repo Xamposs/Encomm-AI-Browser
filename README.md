@@ -7,7 +7,7 @@ and the Microsoft Edge **WebView2** runtime — with a clean engine
 abstraction so that the rendering layer can later be replaced by CEF or a
 custom Chromium-based ENCOMM engine without rewriting the product.
 
-Phase 1 focuses on:
+The product pillars are:
 
 * a real, runnable Windows browser
 * a strict rendering-engine abstraction (`IBrowserEngine`)
@@ -23,10 +23,19 @@ The ordinary user should never need to know what a "token" is.
 
 ## Status
 
-**Phase 1 — Windows Native Foundation** (development snapshot).
+**Phase 3B — Workspace Intelligence MVP** (development snapshot).
 
-The repository is currently **private during local development**. Source
-code is proprietary to ENCOMM.
+Browsing, Ghost tabs, workspaces, Shield and the branded shell are in
+place (Phases 1 → 3A). Phase 3B makes ENCOMM AI-native: page and
+workspace summaries, comparisons, key-fact extraction and Q&A — each
+answered from a **bounded, cited** source set, rendered on a native
+ENCOMM surface, and fully optional. Browsing remains excellent with AI
+disabled or unconfigured. See `docs/PHASE_3B_REPORT.md`.
+
+Current test suite: **130/130 passing**.
+
+The repository is public; the source remains **proprietary** to ENCOMM
+(public source ≠ open-source license).
 
 ## Requirements
 

@@ -40,10 +40,18 @@ Status: **in progress** (see `docs/PHASE_1_REPORT.md`).
 
 ## Phase 4 — Workspace Intelligence
 
-* AI-generated workspace summaries, comparisons, and extraction
-* "Intent workspaces" — natural-language description produces a focused
+Status: **MVP delivered in Phase 3B** (`docs/PHASE_3B_REPORT.md`) —
+bounded context builder, structured results, real source traceability,
+page/workspace summaries, comparisons, extraction and ask-across-workspace,
+all as a native ENCOMM surface with AI strictly optional.
+
+Remaining work under this phase:
+
+* content coverage for cold tabs without waking them (invisible workers)
+* "Intent workspaces" — a natural-language description produces a focused
   workspace
-* AI is enhancement, not requirement
+* generated Canvas surfaces (comparison tables, evidence lists) with the
+  same traceability guarantees
 
 ## Phase 5 — Browser Agents
 
